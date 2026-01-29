@@ -5,8 +5,8 @@ edition = "2021"
 
 description = "An AI observability service for collecting, storing, and querying traces, spans, and metrics across LLM and agent workflows."
 license = "MIT"
-repository = "https://github.com/lipish/XTrace"
-homepage = "https://github.com/lipish/XTrace"
+repository = "https://github.com/lipish/xtrace"
+homepage = "https://github.com/lipish/xtrace"
 documentation = "https://docs.rs/xtrace"
 readme = "README.md"
 
