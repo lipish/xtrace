@@ -52,6 +52,11 @@ cargo install sqlx-cli --no-default-features --features native-tls,postgres
 - `API_BEARER_TOKEN`：对外 API 的 Bearer Token（MVP 先用单一 token）
 - `BIND_ADDR`：监听地址，默认 `127.0.0.1:8080`
 
+兼容 Langfuse public API 的 BasicAuth（可选）：
+
+- `LANGFUSE_PUBLIC_KEY`
+- `LANGFUSE_SECRET_KEY`
+
 建议约定：
 
 - 对外接口（`/api/public/*`）必须校验 `Authorization: Bearer <token>`
@@ -134,6 +139,10 @@ cargo run -p xtrace-api
 export API_BEARER_TOKEN=dev-token
 export BASE_URL=http://127.0.0.1:8080
 
+# 如需用 BasicAuth（兼容 xinference/langfuse 调用方式）
+# export LANGFUSE_PUBLIC_KEY=pk-xxx
+# export LANGFUSE_SECRET_KEY=sk-yyy
+
 # 1) traces 列表（默认返回 core + io + scores + observations + metrics）
 curl -sS "$BASE_URL/api/public/traces?page=1&limit=2" \
   -H "Authorization: Bearer $API_BEARER_TOKEN"
@@ -154,6 +163,10 @@ curl -sS "$BASE_URL/api/public/traces/<TRACE_ID>" \
 # 5) metrics/daily（默认最近 30 天，支持 fromTimestamp/toTimestamp、tags、traceName、userId）
 curl -sS "$BASE_URL/api/public/metrics/daily?page=1&limit=50" \
   -H "Authorization: Bearer $API_BEARER_TOKEN"
+
+# 6) traces 列表（BasicAuth）
+curl -sS -u "$LANGFUSE_PUBLIC_KEY:$LANGFUSE_SECRET_KEY" \
+  "$BASE_URL/api/public/traces?page=1&limit=2"
 ```
 
 ## 写入（Ingest）建议（内部接口）

@@ -6,22 +6,26 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use base64::Engine;
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use sqlx::{postgres::PgPoolOptions, PgPool, QueryBuilder};
 use std::{collections::HashSet, net::SocketAddr, sync::Arc};
 use thiserror::Error;
-use tower_http::trace::TraceLayer;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use tokio::sync::mpsc;
 use tokio::time::Duration;
+use tower_http::trace::TraceLayer;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use uuid::Uuid;
 
 #[derive(Clone)]
 struct AppState {
     pool: PgPool,
     api_bearer_token: Arc<str>,
+    langfuse_public_key: Option<Arc<str>>,
+    langfuse_secret_key: Option<Arc<str>>,
     default_project_id: Arc<str>,
     ingest_tx: mpsc::Sender<BatchIngestRequest>,
 }
@@ -29,16 +33,19 @@ struct AppState {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::registry()
-        .with(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-            "info,tower_http=info,sqlx=warn".into()
-        }))
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "info,tower_http=info,sqlx=warn".into()),
+        )
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    let database_url = std::env::var("DATABASE_URL")
-        .map_err(|_| anyhow::anyhow!("missing env DATABASE_URL"))?;
+    let database_url =
+        std::env::var("DATABASE_URL").map_err(|_| anyhow::anyhow!("missing env DATABASE_URL"))?;
     let api_bearer_token = std::env::var("API_BEARER_TOKEN")
         .map_err(|_| anyhow::anyhow!("missing env API_BEARER_TOKEN"))?;
+    let langfuse_public_key = std::env::var("LANGFUSE_PUBLIC_KEY").ok();
+    let langfuse_secret_key = std::env::var("LANGFUSE_SECRET_KEY").ok();
     let bind_addr = std::env::var("BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
     let default_project_id =
         std::env::var("DEFAULT_PROJECT_ID").unwrap_or_else(|_| "default".to_string());
@@ -53,6 +60,8 @@ async fn main() -> anyhow::Result<()> {
     let state = AppState {
         pool,
         api_bearer_token: Arc::from(api_bearer_token),
+        langfuse_public_key: langfuse_public_key.map(Arc::from),
+        langfuse_secret_key: langfuse_secret_key.map(Arc::from),
         default_project_id: Arc::from(default_project_id),
         ingest_tx,
     };
@@ -68,10 +77,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/public/metrics/daily", get(get_metrics_daily))
         .route("/api/public/traces", get(get_traces))
         .route("/api/public/traces/:traceId", get(get_trace))
-        .route_layer(middleware::from_fn_with_state(
-            state.clone(),
-            bearer_auth,
-        ));
+        .route_layer(middleware::from_fn_with_state(state.clone(), auth));
 
     let app = Router::new()
         .route("/healthz", get(healthz))
@@ -118,31 +124,61 @@ async fn healthz() -> impl IntoResponse {
     StatusCode::OK
 }
 
-async fn bearer_auth(
+async fn auth(
     State(state): State<AppState>,
     headers: HeaderMap,
     request: axum::extract::Request,
     next: Next,
 ) -> impl IntoResponse {
-    match extract_bearer_token(&headers) {
-        Ok(token) if token == state.api_bearer_token.as_ref() => next.run(request).await,
+    match extract_auth(&headers) {
+        Ok(AuthHeader::Bearer(token)) if token == state.api_bearer_token.as_ref() => {
+            next.run(request).await
+        }
+        Ok(AuthHeader::Basic { username, password })
+            if state
+                .langfuse_public_key
+                .as_deref()
+                .is_some_and(|k| k == username)
+                && state
+                    .langfuse_secret_key
+                    .as_deref()
+                    .is_some_and(|k| k == password) =>
+        {
+            next.run(request).await
+        }
         _ => StatusCode::UNAUTHORIZED.into_response(),
     }
 }
 
-fn extract_bearer_token(headers: &HeaderMap) -> Result<&str, ()> {
+enum AuthHeader {
+    Bearer(String),
+    Basic { username: String, password: String },
+}
+
+fn extract_auth(headers: &HeaderMap) -> Result<AuthHeader, ()> {
     let value = headers
         .get(header::AUTHORIZATION)
         .ok_or(())
-        .and_then(|v| v.to_str().map_err(|_| ()))?;
+        .and_then(|v| v.to_str().map_err(|_| ()))?
+        .trim();
 
-    let value = value.trim();
-    let prefix = "Bearer ";
-    if let Some(rest) = value.strip_prefix(prefix) {
-        Ok(rest.trim())
-    } else {
-        Err(())
+    if let Some(rest) = value.strip_prefix("Bearer ") {
+        return Ok(AuthHeader::Bearer(rest.trim().to_string()));
     }
+
+    if let Some(rest) = value.strip_prefix("Basic ") {
+        let decoded = BASE64_STANDARD
+            .decode(rest.trim().as_bytes())
+            .map_err(|_| ())?;
+        let decoded = std::str::from_utf8(&decoded).map_err(|_| ())?;
+        let (username, password) = decoded.split_once(':').ok_or(())?;
+        return Ok(AuthHeader::Basic {
+            username: username.to_string(),
+            password: password.to_string(),
+        });
+    }
+
+    Err(())
 }
 
 #[derive(Debug, Serialize)]
@@ -375,10 +411,7 @@ async fn write_one(
     let now = Utc::now();
 
     if let Some(trace) = payload.trace {
-        let project_id = trace
-            .projectId
-            .as_deref()
-            .unwrap_or(default_project_id);
+        let project_id = trace.projectId.as_deref().unwrap_or(default_project_id);
         let timestamp = trace.timestamp.unwrap_or(now);
         let environment = trace.environment.unwrap_or_else(|| "default".to_string());
 
@@ -641,9 +674,8 @@ async fn get_metrics_daily(
         (total_items + limit - 1) / limit
     };
 
-    let mut builder: QueryBuilder<'_, sqlx::Postgres> = QueryBuilder::new(
-        "WITH filtered_traces AS (SELECT t.* FROM traces t WHERE 1=1",
-    );
+    let mut builder: QueryBuilder<'_, sqlx::Postgres> =
+        QueryBuilder::new("WITH filtered_traces AS (SELECT t.* FROM traces t WHERE 1=1");
     builder.push(" AND t.project_id = ");
     builder.push_bind(project_id.to_string());
     builder.push(" AND t.\"timestamp\" >= ");
@@ -665,7 +697,7 @@ async fn get_metrics_daily(
     }
 
     builder.push(
-        ")\n, daily AS (\n  SELECT\n    date_trunc('day', ft.\"timestamp\")::date AS day,\n    COUNT(*)::BIGINT AS count_traces,\n    COALESCE(SUM(ft.total_cost), 0)::DOUBLE PRECISION AS total_cost\n  FROM filtered_traces ft\n  GROUP BY 1\n)\n, daily_obs AS (\n  SELECT\n    date_trunc('day', ft.\"timestamp\")::date AS day,\n    COUNT(o.id)::BIGINT AS count_observations\n  FROM filtered_traces ft\n  JOIN observations o ON o.trace_id = ft.id\n  GROUP BY 1\n)\n, model_usage AS (\n  SELECT\n    date_trunc('day', ft.\"timestamp\")::date AS day,\n    COALESCE(o.model, 'unknown') AS model,\n    COALESCE(SUM(o.prompt_tokens), 0)::BIGINT AS input_usage,\n    COALESCE(SUM(o.completion_tokens), 0)::BIGINT AS output_usage,\n    COALESCE(SUM(o.total_tokens), 0)::BIGINT AS total_usage,\n    COUNT(DISTINCT ft.id)::BIGINT AS count_traces,\n    COUNT(o.id)::BIGINT AS count_observations,\n    COALESCE(SUM(o.calculated_total_cost), 0)::DOUBLE PRECISION AS total_cost\n  FROM filtered_traces ft\n  JOIN observations o ON o.trace_id = ft.id\n  WHERE o.type = 'GENERATION'\n  GROUP BY 1, 2\n)\n, daily_usage AS (\n  SELECT\n    mu.day,\n    COALESCE(jsonb_agg(\n      jsonb_build_object(\n        'model', mu.model,\n        'inputUsage', mu.input_usage,\n        'outputUsage', mu.output_usage,\n        'totalUsage', mu.total_usage,\n        'countTraces', mu.count_traces,\n        'countObservations', mu.count_observations,\n        'totalCost', mu.total_cost\n      ) ORDER BY mu.total_cost DESC\n    ), '[]'::jsonb) AS usage\n  FROM model_usage mu\n  GROUP BY 1\n)\nSELECT\n  d.day AS day,\n  d.count_traces AS count_traces,\n  COALESCE(do.count_observations, 0) AS count_observations,\n  d.total_cost AS total_cost,\n  COALESCE(du.usage, '[]'::jsonb) AS usage\nFROM daily d\nLEFT JOIN daily_obs do ON do.day = d.day\nLEFT JOIN daily_usage du ON du.day = d.day\nORDER BY d.day DESC\nLIMIT ",
+        ")\n, daily AS (\n  SELECT\n    date_trunc('day', ft.\"timestamp\")::date AS day,\n    COUNT(*)::BIGINT AS count_traces,\n    COALESCE(SUM(ft.total_cost), 0)::DOUBLE PRECISION AS total_cost\n  FROM filtered_traces ft\n  GROUP BY 1\n)\n, daily_obs AS (\n  SELECT\n    date_trunc('day', ft.\"timestamp\")::date AS day,\n    COUNT(o.id)::BIGINT AS count_observations\n  FROM filtered_traces ft\n  JOIN observations o ON o.trace_id = ft.id\n  GROUP BY 1\n)\n, model_usage AS (\n  SELECT\n    date_trunc('day', ft.\"timestamp\")::date AS day,\n    COALESCE(o.model, 'unknown') AS model,\n    COALESCE(SUM(o.prompt_tokens), 0)::BIGINT AS input_usage,\n    COALESCE(SUM(o.completion_tokens), 0)::BIGINT AS output_usage,\n    COALESCE(SUM(o.total_tokens), 0)::BIGINT AS total_usage,\n    COUNT(DISTINCT ft.id)::BIGINT AS count_traces,\n    COUNT(o.id)::BIGINT AS count_observations,\n    COALESCE(SUM(o.calculated_total_cost), 0)::DOUBLE PRECISION AS total_cost\n  FROM filtered_traces ft\n  JOIN observations o ON o.trace_id = ft.id\n  WHERE o.type = 'GENERATION'\n  GROUP BY 1, 2\n)\n, daily_usage AS (\n  SELECT\n    mu.day,\n    COALESCE(jsonb_agg(\n      jsonb_build_object(\n        'model', mu.model,\n        'inputUsage', mu.input_usage,\n        'outputUsage', mu.output_usage,\n        'totalUsage', mu.total_usage,\n        'countTraces', mu.count_traces,\n        'countObservations', mu.count_observations,\n        'totalCost', mu.total_cost\n      ) ORDER BY mu.total_cost DESC\n    ), '[]'::jsonb) AS usage\n  FROM model_usage mu\n  GROUP BY 1\n)\nSELECT\n  d.day AS day,\n  d.count_traces AS count_traces,\n  COALESCE(dob.count_observations, 0) AS count_observations,\n  d.total_cost AS total_cost,\n  COALESCE(du.usage, '[]'::jsonb) AS usage\nFROM daily d\nLEFT JOIN daily_obs dob ON dob.day = d.day\nLEFT JOIN daily_usage du ON du.day = d.day\nORDER BY d.day DESC\nLIMIT ",
     );
     builder.push_bind(limit);
     builder.push(" OFFSET ");
@@ -826,9 +858,8 @@ async fn get_traces(
 
     let (order_column, order_desc) = parse_order_by(q.order_by.as_deref())?;
 
-    let mut count_builder: QueryBuilder<'_, sqlx::Postgres> = QueryBuilder::new(
-        "SELECT COUNT(*)::BIGINT AS cnt FROM traces t WHERE 1=1",
-    );
+    let mut count_builder: QueryBuilder<'_, sqlx::Postgres> =
+        QueryBuilder::new("SELECT COUNT(*)::BIGINT AS cnt FROM traces t WHERE 1=1");
     count_builder.push(" AND t.project_id = ");
     count_builder.push_bind(state.default_project_id.to_string());
     apply_trace_filters(&mut count_builder, &q);
@@ -890,14 +921,25 @@ WHERE 1=1
         .into_iter()
         .map(|r| {
             let observations = if fields.observations {
-                r.observations.into_iter().map(|id| id.to_string()).collect()
+                r.observations
+                    .into_iter()
+                    .map(|id| id.to_string())
+                    .collect()
             } else {
                 vec![]
             };
             let scores = if fields.scores { vec![] } else { vec![] };
 
-            let latency = if fields.metrics { r.latency } else { Some(-1.0) };
-            let total_cost = if fields.metrics { r.total_cost } else { Some(-1.0) };
+            let latency = if fields.metrics {
+                r.latency
+            } else {
+                Some(-1.0)
+            };
+            let total_cost = if fields.metrics {
+                r.total_cost
+            } else {
+                Some(-1.0)
+            };
 
             TraceListItem {
                 html_path: format!("/project/{}/traces/{}", r.project_id, r.id),
@@ -1369,17 +1411,25 @@ enum ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> axum::response::Response {
+        if let ApiError::Sqlx(err) = &self {
+            tracing::error!(error = %err, "sqlx error");
+        }
+
         let (status, msg) = match self {
             ApiError::BadRequest(m) => (StatusCode::BAD_REQUEST, m),
             ApiError::NotFound => (StatusCode::NOT_FOUND, "Not Found".to_string()),
-            ApiError::TooManyRequests => {
-                (StatusCode::TOO_MANY_REQUESTS, "Too Many Requests".to_string())
-            }
+            ApiError::TooManyRequests => (
+                StatusCode::TOO_MANY_REQUESTS,
+                "Too Many Requests".to_string(),
+            ),
             ApiError::ServiceUnavailable => (
                 StatusCode::SERVICE_UNAVAILABLE,
                 "Service Unavailable".to_string(),
             ),
-            ApiError::Sqlx(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Internal Error".to_string()),
+            ApiError::Sqlx(_) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Internal Error".to_string(),
+            ),
         };
 
         let body = Json(ApiResponse::<serde_json::Value> {
