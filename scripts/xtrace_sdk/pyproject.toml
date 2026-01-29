@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "xtrace-sdk"
+version = "0.0.1"
+description = "XTrace Python SDK"
+requires-python = ">=3.9"
+dependencies = [
+  "requests>=2.31",
+]
+
+[tool.setuptools]
+packages = ["xtrace_sdk"]
