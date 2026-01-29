@@ -3,6 +3,16 @@ name = "xtrace"
 version = "0.0.2"
 edition = "2021"
 
+description = "An AI observability service for collecting, storing, and querying traces, spans, and metrics across LLM and agent workflows."
+license = "MIT"
+repository = "https://github.com/lipish/XTrace"
+homepage = "https://github.com/lipish/XTrace"
+documentation = "https://docs.rs/xtrace"
+readme = "README.md"
+
+keywords = ["observability", "tracing", "llm", "ai", "telemetry"]
+categories = ["web-programming", "development-tools"]
+
 [dependencies]
 axum = { version = "0.7", features = ["macros"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time"] }

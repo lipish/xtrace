@@ -928,7 +928,11 @@ WHERE 1=1
             } else {
                 vec![]
             };
-            let scores = if fields.scores { vec![] } else { vec![] };
+            let scores = if fields.scores {
+                Vec::new()
+            } else {
+                Vec::with_capacity(0)
+            };
 
             let latency = if fields.metrics {
                 r.latency
@@ -1005,11 +1009,11 @@ fn apply_trace_filters(builder: &mut QueryBuilder<'_, sqlx::Postgres>, q: &Trace
     }
     if let Some(from_ts) = &q.from_timestamp {
         builder.push(" AND t.timestamp >= ");
-        builder.push_bind(from_ts.clone());
+        builder.push_bind(*from_ts);
     }
     if let Some(to_ts) = &q.to_timestamp {
         builder.push(" AND t.timestamp <= ");
-        builder.push_bind(to_ts.clone());
+        builder.push_bind(*to_ts);
     }
     if !q.tags.is_empty() {
         builder.push(" AND t.tags @> ");
