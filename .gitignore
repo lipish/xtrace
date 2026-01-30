@@ -8,5 +8,4 @@ __pycache__/
 dist/
 build/
 .venv/
-xinference-backend/
 xgateway/
