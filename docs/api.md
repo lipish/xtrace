@@ -32,7 +32,7 @@ Base URLs:
 
 ## GET traces接口
 
-GET /v1/l/traces
+GET /api/public/traces
 
 ### 请求参数
 
@@ -40,12 +40,12 @@ GET /v1/l/traces
 | -------------- | ----- | ------------- | ---- | ---------------- |
 | page           | query | integer       | 否   | 页数             |
 | limit          | query | integer       | 否   | 返回条数限制     |
-| user_id        | query | string        | 否   | 记录的用户id     |
+| userId         | query | string        | 否   | 记录的用户id     |
 | name           | query | string        | 否   | 记录的名称       |
-| session_id     | query | string        | 否   | 记录的session_id |
-| from_timestamp | query | string        | 否   | iso 8601格式     |
-| to_timestamp   | query | string        | 否   | iso 8601格式     |
-| order_by       | query | string        | 否   | 排序             |
+| sessionId      | query | string        | 否   | 记录的session_id |
+| fromTimestamp  | query | string        | 否   | iso 8601格式     |
+| toTimestamp    | query | string        | 否   | iso 8601格式     |
+| orderBy        | query | string        | 否   | 排序             |
 | tags           | query | array[string] | 否   | 标签             |
 
 > 返回示例
@@ -139,7 +139,7 @@ GET /v1/l/traces
 
 ## GET trace接口
 
-GET /v1/l/traces/{trace_id}
+GET /api/public/traces/{trace_id}
 
 ### 请求参数
 

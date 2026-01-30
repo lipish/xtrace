@@ -28,3 +28,6 @@ uuid = { version = "1", features = ["serde", "v4"] }
 thiserror = "1"
 
 sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono", "json"] }
+
+[workspace]
+members = ["crates/xtrace-client"]
