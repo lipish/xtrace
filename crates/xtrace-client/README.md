@@ -4,14 +4,12 @@
 
 ## 安装
 
-在仓库内开发时推荐用 path 依赖：
+已发布到 crates.io：
 
 ```toml
 [dependencies]
-xtrace-client = { path = "../crates/xtrace-client" }
+xtrace-client = "0.0.1"
 ```
-
-如果后续发布到 crates.io，可以改为版本依赖。
 
 ## 使用
 

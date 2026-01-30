@@ -85,7 +85,7 @@ curl -H "Authorization: Bearer $API_BEARER_TOKEN" \
 
 ```toml
 [dependencies]
-xtrace-client = { path = "crates/xtrace-client" }
+xtrace-client = "0.0.1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
