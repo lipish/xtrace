@@ -13,12 +13,15 @@ xtrace 是一个用于 AI/LLM 可观测性的服务端组件，用于采集、�
 `API_BEARER_TOKEN`（必填，用于保护接口）
 `BIND_ADDR`（可选，默认 `127.0.0.1:8080`）
 `DEFAULT_PROJECT_ID`（可选，默认 `default`）
-`LANGFUSE_PUBLIC_KEY`（可选）
-`LANGFUSE_SECRET_KEY`（可选）
+`XTRACE_PUBLIC_KEY`（可选，用于兼容 Langfuse public API BasicAuth）
+`XTRACE_SECRET_KEY`（可选，用于兼容 Langfuse public API BasicAuth）
+
+兼容：
+也支持旧命名 `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY`。
 
 启动：
 ```bash
-DATABASE_URL=postgres://... \
+DATABASE_URL=postgresql://xinference@localhost:5432/xtrace \
 API_BEARER_TOKEN=... \
 cargo run --release
 ```

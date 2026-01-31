@@ -1,6 +1,6 @@
 [package]
 name = "xtrace"
-version = "0.0.2"
+version = "0.0.3"
 edition = "2021"
 
 description = "An AI observability service for collecting, storing, and querying traces, spans, and metrics across LLM and agent workflows."
@@ -32,9 +32,9 @@ thiserror = "1"
 
 # OTLP/HTTP protobuf decoding for Langfuse OpenTelemetry exporter
 opentelemetry-proto = { version = "0.31", features = ["gen-tonic"] }
-prost = "0.13"
+prost = "0.14"
 
-sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono", "json"] }
+sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono", "json", "migrate"] }
 
 [workspace]
 members = ["crates/xtrace-client"]

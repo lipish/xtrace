@@ -1306,7 +1306,7 @@ dependencies = [
  "const-hex",
  "opentelemetry",
  "opentelemetry_sdk",
- "prost 0.14.3",
+ "prost",
  "serde",
  "serde_json",
  "tonic",
@@ -1475,35 +1475,12 @@ dependencies = [
 
 [[package]]
 name = "prost"
-version = "0.13.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2796faa41db3ec313a31f7624d9286acf277b52de526150b7e69f3debf891ee5"
-dependencies = [
- "bytes",
- "prost-derive 0.13.5",
-]
-
-[[package]]
-name = "prost"
 version = "0.14.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2ea70524a2f82d518bce41317d0fae74151505651af45faf1ffbd6fd33f0568"
 dependencies = [
  "bytes",
- "prost-derive 0.14.3",
-]
-
-[[package]]
-name = "prost-derive"
-version = "0.13.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8a56d757972c98b346a9b766e3f02746cde6dd1cd1d1d563472929fdd74bec4d"
-dependencies = [
- "anyhow",
- "itertools",
- "proc-macro2",
- "quote",
- "syn 2.0.114",
+ "prost-derive",
 ]
 
 [[package]]
@@ -2576,7 +2553,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6c55a2d6a14174563de34409c9f92ff981d006f56da9c6ecd40d9d4a31500b0"
 dependencies = [
  "bytes",
- "prost 0.14.3",
+ "prost",
  "tonic",
 ]
 
@@ -3265,7 +3242,7 @@ checksum = "9edde0db4769d2dc68579893f2306b26c6ecfbe0ef499b013d731b7b9247e0b9"
 
 [[package]]
 name = "xtrace"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "anyhow",
  "axum",
@@ -3275,7 +3252,7 @@ dependencies = [
  "flate2",
  "hex",
  "opentelemetry-proto",
- "prost 0.13.5",
+ "prost",
  "serde",
  "serde_json",
  "sqlx",

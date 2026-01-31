@@ -54,8 +54,11 @@ cargo install sqlx-cli --no-default-features --features native-tls,postgres
 
 兼容 Langfuse public API 的 BasicAuth（可选）：
 
-- `LANGFUSE_PUBLIC_KEY`
-- `LANGFUSE_SECRET_KEY`
+- `XTRACE_PUBLIC_KEY`
+- `XTRACE_SECRET_KEY`
+
+兼容：
+也支持旧命名 `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY`。
 
 建议约定：
 
@@ -140,8 +143,8 @@ export API_BEARER_TOKEN=dev-token
 export BASE_URL=http://127.0.0.1:8080
 
 # 如需用 BasicAuth（兼容 xinference/langfuse 调用方式）
-# export LANGFUSE_PUBLIC_KEY=pk-xxx
-# export LANGFUSE_SECRET_KEY=sk-yyy
+# export XTRACE_PUBLIC_KEY=pk-xxx
+# export XTRACE_SECRET_KEY=sk-yyy
 
 # 1) traces 列表（默认返回 core + io + scores + observations + metrics）
 curl -sS "$BASE_URL/api/public/traces?page=1&limit=2" \
@@ -165,7 +168,7 @@ curl -sS "$BASE_URL/api/public/metrics/daily?page=1&limit=50" \
   -H "Authorization: Bearer $API_BEARER_TOKEN"
 
 # 6) traces 列表（BasicAuth）
-curl -sS -u "$LANGFUSE_PUBLIC_KEY:$LANGFUSE_SECRET_KEY" \
+curl -sS -u "$XTRACE_PUBLIC_KEY:$XTRACE_SECRET_KEY" \
   "$BASE_URL/api/public/traces?page=1&limit=2"
 ```
 

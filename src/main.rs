@@ -1,6 +1,5 @@
 use axum::{
     extract::{Path, Query, State},
-    http::HeaderValue,
     http::{header, HeaderMap, StatusCode},
     middleware::{self, Next},
     response::IntoResponse,
@@ -137,6 +136,15 @@ struct OtelAnyValue {
     double_value: Option<f64>,
     #[serde(default)]
     bool_value: Option<bool>,
+    #[serde(default)]
+    array_value: Option<OtelArrayValue>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OtelArrayValue {
+    #[serde(default)]
+    values: Vec<OtelAnyValue>,
 }
 
 fn decode_hex(s: &str) -> Option<Vec<u8>> {
@@ -193,27 +201,32 @@ fn unix_nano_to_datetime(v: &Option<String>) -> Option<DateTime<Utc>> {
     Utc.timestamp_opt(secs, sub_nanos).single()
 }
 
-fn otel_value_to_json(v: &Option<OtelAnyValue>) -> JsonValue {
-    if let Some(v) = v {
-        if let Some(s) = &v.string_value {
-            return JsonValue::String(s.clone());
+fn otel_any_value_to_json(v: &OtelAnyValue) -> JsonValue {
+    if let Some(s) = &v.string_value {
+        return JsonValue::String(s.clone());
+    }
+    if let Some(s) = &v.int_value {
+        if let Ok(i) = s.parse::<i64>() {
+            return JsonValue::Number(i.into());
         }
-        if let Some(s) = &v.int_value {
-            if let Ok(i) = s.parse::<i64>() {
-                return JsonValue::Number(i.into());
-            }
-            return JsonValue::String(s.clone());
-        }
-        if let Some(f) = v.double_value {
-            if let Some(n) = serde_json::Number::from_f64(f) {
-                return JsonValue::Number(n);
-            }
-        }
-        if let Some(b) = v.bool_value {
-            return JsonValue::Bool(b);
+        return JsonValue::String(s.clone());
+    }
+    if let Some(f) = v.double_value {
+        if let Some(n) = serde_json::Number::from_f64(f) {
+            return JsonValue::Number(n);
         }
     }
+    if let Some(b) = v.bool_value {
+        return JsonValue::Bool(b);
+    }
+    if let Some(arr) = &v.array_value {
+        return JsonValue::Array(arr.values.iter().map(otel_any_value_to_json).collect());
+    }
     JsonValue::Null
+}
+
+fn otel_value_to_json(v: &Option<OtelAnyValue>) -> JsonValue {
+    v.as_ref().map(otel_any_value_to_json).unwrap_or(JsonValue::Null)
 }
 
 fn attributes_to_map(attrs: &[OtelKeyValue]) -> serde_json::Map<String, JsonValue> {
@@ -232,9 +245,55 @@ fn extract_string_attr(attrs: &[OtelKeyValue], key: &str) -> Option<String> {
         .and_then(|v| v.string_value.clone())
 }
 
-fn header_eq(h: Option<&HeaderValue>, expected: &str) -> bool {
-    h.and_then(|v| v.to_str().ok())
-        .is_some_and(|s| s.eq_ignore_ascii_case(expected))
+fn extract_array_string_attr(attrs: &[OtelKeyValue], key: &str) -> Option<Vec<String>> {
+    let v = attrs
+        .iter()
+        .find(|kv| kv.key == key)
+        .and_then(|kv| kv.value.as_ref())?
+        .array_value
+        .as_ref()?;
+
+    let mut out = Vec::with_capacity(v.values.len());
+    for item in &v.values {
+        if let Some(s) = &item.string_value {
+            out.push(s.clone());
+        }
+    }
+    Some(out)
+}
+
+fn extract_prefixed_map(attrs: &[OtelKeyValue], prefix: &str) -> serde_json::Map<String, JsonValue> {
+    let mut out = serde_json::Map::new();
+    for kv in attrs {
+        if let Some(rest) = kv.key.strip_prefix(prefix) {
+            if !rest.is_empty() {
+                if let Some(v) = &kv.value {
+                    out.insert(rest.to_string(), otel_any_value_to_json(v));
+                }
+            }
+        }
+    }
+    out
+}
+
+fn parse_usage_details(attrs: &[OtelKeyValue]) -> (Option<i64>, Option<i64>, Option<i64>, Option<JsonValue>) {
+    let raw = match extract_string_attr(attrs, "langfuse.observation.usage_details") {
+        Some(s) => s,
+        None => return (None, None, None, None),
+    };
+    let v: JsonValue = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(_) => return (None, None, None, None),
+    };
+    let prompt = v.get("promptTokens").and_then(|x| x.as_i64());
+    let completion = v.get("completionTokens").and_then(|x| x.as_i64());
+    let total = v.get("totalTokens").and_then(|x| x.as_i64());
+    let usage = Some(serde_json::json!({
+        "input": prompt.unwrap_or(0),
+        "output": completion.unwrap_or(0),
+        "total": total.unwrap_or(0)
+    }));
+    (completion, prompt, total, usage)
 }
 
 fn is_gzip(headers: &HeaderMap) -> bool {
@@ -259,7 +318,7 @@ fn ungzip_if_needed(headers: &HeaderMap, body: Bytes) -> Result<Vec<u8>, ApiErro
     let mut out = Vec::new();
     decoder
         .read_to_end(&mut out)
-        .map_err(|_| ApiError::BadRequest)?;
+        .map_err(|e| ApiError::BadRequest(format!("gzip decode failed: {e}")))?;
     Ok(out)
 }
 
@@ -271,6 +330,8 @@ fn map_otel_to_batches(
     let mut per_trace: std::collections::BTreeMap<Uuid, Vec<ObservationIngest>> =
         std::collections::BTreeMap::new();
     let mut trace_first_ts: std::collections::BTreeMap<Uuid, DateTime<Utc>> =
+        std::collections::BTreeMap::new();
+    let mut trace_acc: std::collections::BTreeMap<Uuid, TraceIngest> =
         std::collections::BTreeMap::new();
 
     for rs in payload.resource_spans {
@@ -326,6 +387,65 @@ fn map_otel_to_batches(
                             .or(Some(JsonValue::String(s)))
                     });
 
+                // trace-level promotion
+                let trace_name = extract_string_attr(&span.attributes, "langfuse.trace.name");
+                let user_id = extract_string_attr(&span.attributes, "user.id");
+                let session_id = extract_string_attr(&span.attributes, "session.id");
+                let tags = extract_array_string_attr(&span.attributes, "langfuse.trace.tags");
+                let trace_meta = extract_prefixed_map(&span.attributes, "langfuse.trace.metadata.");
+
+                trace_acc
+                    .entry(trace_id)
+                    .and_modify(|t| {
+                        if t.name.is_none() {
+                            t.name = trace_name.clone();
+                        }
+                        if t.userId.is_none() {
+                            t.userId = user_id.clone();
+                        }
+                        if t.session_id.is_none() {
+                            t.session_id = session_id.clone();
+                        }
+                        if t.tags.is_empty() {
+                            if let Some(tags) = &tags {
+                                t.tags = tags.clone();
+                            }
+                        }
+                        if let Some(m) = &mut t.metadata {
+                            if let JsonValue::Object(obj) = m {
+                                for (k, v) in trace_meta.clone() {
+                                    obj.insert(k, v);
+                                }
+                            }
+                        } else if !trace_meta.is_empty() {
+                            t.metadata = Some(JsonValue::Object(trace_meta.clone()));
+                        }
+                    })
+                    .or_insert_with(|| TraceIngest {
+                        id: trace_id,
+                        timestamp: None,
+                        name: trace_name.clone(),
+                        input: None,
+                        output: None,
+                        session_id: session_id.clone(),
+                        release: None,
+                        version: None,
+                        userId: user_id.clone(),
+                        metadata: if trace_meta.is_empty() {
+                            None
+                        } else {
+                            Some(JsonValue::Object(trace_meta.clone()))
+                        },
+                        tags: tags.unwrap_or_default(),
+                        public: None,
+                        environment: Some("default".to_string()),
+                        externalId: None,
+                        bookmarked: None,
+                        latency: None,
+                        totalCost: None,
+                        projectId: Some(default_project_id.clone()),
+                    });
+
                 let mut meta = attributes_to_map(&span.attributes);
                 if let Some(rattrs) = resource_attrs {
                     meta.insert(
@@ -333,6 +453,9 @@ fn map_otel_to_batches(
                         JsonValue::Object(attributes_to_map(rattrs)),
                     );
                 }
+
+                let (completion_tokens, prompt_tokens, total_tokens, usage_json) =
+                    parse_usage_details(&span.attributes);
 
                 let obs = ObservationIngest {
                     id: span_uuid,
@@ -346,7 +469,7 @@ fn map_otel_to_batches(
                     modelParameters: None,
                     input,
                     output,
-                    usage: None,
+                    usage: usage_json,
                     level: None,
                     statusMessage: None,
                     parentObservationId: parent_uuid,
@@ -362,9 +485,10 @@ fn map_otel_to_batches(
                     calculatedTotalCost: None,
                     latency: None,
                     timeToFirstToken: None,
-                    completionTokens: None,
-                    promptTokens: None,
-                    totalTokens: None,
+
+                    completionTokens: completion_tokens,
+                    promptTokens: prompt_tokens,
+                    totalTokens: total_tokens,
                     unit: None,
                     metadata: Some(JsonValue::Object(meta)),
                     environment: None,
@@ -379,27 +503,29 @@ fn map_otel_to_batches(
     let mut out = Vec::with_capacity(per_trace.len());
     for (trace_id, observations) in per_trace {
         let timestamp = trace_first_ts.get(&trace_id).cloned();
+        let mut trace = trace_acc.remove(&trace_id).unwrap_or(TraceIngest {
+            id: trace_id,
+            timestamp: None,
+            name: None,
+            input: None,
+            output: None,
+            session_id: None,
+            release: None,
+            version: None,
+            userId: None,
+            metadata: None,
+            tags: vec![],
+            public: None,
+            environment: Some("default".to_string()),
+            externalId: None,
+            bookmarked: None,
+            latency: None,
+            totalCost: None,
+            projectId: Some(default_project_id.clone()),
+        });
+        trace.timestamp = timestamp;
         out.push(BatchIngestRequest {
-            trace: Some(TraceIngest {
-                id: trace_id,
-                timestamp,
-                name: None,
-                input: None,
-                output: None,
-                session_id: None,
-                release: None,
-                version: None,
-                userId: None,
-                metadata: None,
-                tags: vec![],
-                public: None,
-                environment: None,
-                externalId: None,
-                bookmarked: None,
-                latency: None,
-                totalCost: None,
-                projectId: Some(default_project_id.clone()),
-            }),
+            trace: Some(trace),
             observations,
         });
     }
@@ -435,6 +561,35 @@ fn pb_to_otel_json(payload: PbExportTraceServiceRequest) -> OtelExportTraceServi
                             }),
                             bool_value: av.value.as_ref().and_then(|v| match v {
                                 opentelemetry_proto::tonic::common::v1::any_value::Value::BoolValue(b) => Some(*b),
+                                _ => None,
+                            }),
+                            array_value: av.value.as_ref().and_then(|v| match v {
+                                opentelemetry_proto::tonic::common::v1::any_value::Value::ArrayValue(arr) => Some(OtelArrayValue {
+                                    values: arr
+                                        .values
+                                        .iter()
+                                        .filter_map(|x| x.value.as_ref())
+                                        .map(|vv| OtelAnyValue {
+                                            string_value: match vv {
+                                                opentelemetry_proto::tonic::common::v1::any_value::Value::StringValue(s) => Some(s.clone()),
+                                                _ => None,
+                                            },
+                                            int_value: match vv {
+                                                opentelemetry_proto::tonic::common::v1::any_value::Value::IntValue(i) => Some(i.to_string()),
+                                                _ => None,
+                                            },
+                                            double_value: match vv {
+                                                opentelemetry_proto::tonic::common::v1::any_value::Value::DoubleValue(f) => Some(*f),
+                                                _ => None,
+                                            },
+                                            bool_value: match vv {
+                                                opentelemetry_proto::tonic::common::v1::any_value::Value::BoolValue(b) => Some(*b),
+                                                _ => None,
+                                            },
+                                            array_value: None,
+                                        })
+                                        .collect(),
+                                }),
                                 _ => None,
                             }),
                         }),
@@ -490,6 +645,35 @@ fn pb_to_otel_json(payload: PbExportTraceServiceRequest) -> OtelExportTraceServi
                                             opentelemetry_proto::tonic::common::v1::any_value::Value::BoolValue(b) => Some(*b),
                                             _ => None,
                                         }),
+                                        array_value: av.value.as_ref().and_then(|v| match v {
+                                            opentelemetry_proto::tonic::common::v1::any_value::Value::ArrayValue(arr) => Some(OtelArrayValue {
+                                                values: arr
+                                                    .values
+                                                    .iter()
+                                                    .filter_map(|x| x.value.as_ref())
+                                                    .map(|vv| OtelAnyValue {
+                                                        string_value: match vv {
+                                                            opentelemetry_proto::tonic::common::v1::any_value::Value::StringValue(s) => Some(s.clone()),
+                                                            _ => None,
+                                                        },
+                                                        int_value: match vv {
+                                                            opentelemetry_proto::tonic::common::v1::any_value::Value::IntValue(i) => Some(i.to_string()),
+                                                            _ => None,
+                                                        },
+                                                        double_value: match vv {
+                                                            opentelemetry_proto::tonic::common::v1::any_value::Value::DoubleValue(f) => Some(*f),
+                                                            _ => None,
+                                                        },
+                                                        bool_value: match vv {
+                                                            opentelemetry_proto::tonic::common::v1::any_value::Value::BoolValue(b) => Some(*b),
+                                                            _ => None,
+                                                        },
+                                                        array_value: None,
+                                                    })
+                                                    .collect(),
+                                            }),
+                                            _ => None,
+                                        }),
                                     }),
                                 })
                                 .collect(),
@@ -517,12 +701,13 @@ async fn post_otel_traces(
     let ct = content_type(&headers).unwrap_or_else(|| "application/json".to_string());
 
     let otel: OtelExportTraceServiceRequest = if ct == "application/json" {
-        serde_json::from_slice(&raw).map_err(|_| ApiError::BadRequest)?
+        serde_json::from_slice(&raw).map_err(|e| ApiError::BadRequest(format!("invalid json: {e}")))?
     } else if ct == "application/x-protobuf" {
-        let pb = PbExportTraceServiceRequest::decode(raw.as_slice()).map_err(|_| ApiError::BadRequest)?;
+        let pb =
+            PbExportTraceServiceRequest::decode(raw.as_slice()).map_err(|e| ApiError::BadRequest(format!("invalid protobuf: {e}")))?;
         pb_to_otel_json(pb)
     } else {
-        return Err(ApiError::BadRequest);
+        return Err(ApiError::BadRequest(format!("unsupported content-type: {ct}")));
     };
 
     let batches = map_otel_to_batches(&state, otel)?;
@@ -553,8 +738,13 @@ async fn main() -> anyhow::Result<()> {
         std::env::var("DATABASE_URL").map_err(|_| anyhow::anyhow!("missing env DATABASE_URL"))?;
     let api_bearer_token = std::env::var("API_BEARER_TOKEN")
         .map_err(|_| anyhow::anyhow!("missing env API_BEARER_TOKEN"))?;
-    let langfuse_public_key = std::env::var("LANGFUSE_PUBLIC_KEY").ok();
-    let langfuse_secret_key = std::env::var("LANGFUSE_SECRET_KEY").ok();
+
+    let langfuse_public_key = std::env::var("XTRACE_PUBLIC_KEY")
+        .ok()
+        .or_else(|| std::env::var("LANGFUSE_PUBLIC_KEY").ok());
+    let langfuse_secret_key = std::env::var("XTRACE_SECRET_KEY")
+        .ok()
+        .or_else(|| std::env::var("LANGFUSE_SECRET_KEY").ok());
     let bind_addr = std::env::var("BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
     let default_project_id =
         std::env::var("DEFAULT_PROJECT_ID").unwrap_or_else(|_| "default".to_string());
@@ -563,6 +753,8 @@ async fn main() -> anyhow::Result<()> {
         .max_connections(20)
         .connect(&database_url)
         .await?;
+
+    sqlx::migrate!("./migrations").run(&pool).await?;
 
     let (ingest_tx, ingest_rx) = mpsc::channel::<BatchIngestRequest>(1000);
 
@@ -641,6 +833,14 @@ async fn auth(
     request: axum::extract::Request,
     next: Next,
 ) -> impl IntoResponse {
+    let path = request.uri().path();
+    let is_langfuse_compat = matches!(
+        path,
+        "/api/public/projects" | "/api/public/otel/v1/traces"
+    );
+    let langfuse_auth_not_configured =
+        state.langfuse_public_key.is_none() && state.langfuse_secret_key.is_none();
+
     match extract_auth(&headers) {
         Ok(AuthHeader::Bearer(token)) if token == state.api_bearer_token.as_ref() => {
             next.run(request).await
@@ -657,7 +857,18 @@ async fn auth(
         {
             next.run(request).await
         }
-        _ => StatusCode::UNAUTHORIZED.into_response(),
+        Err(()) if is_langfuse_compat && langfuse_auth_not_configured => next.run(request).await,
+        Ok(AuthHeader::Basic { .. }) if is_langfuse_compat && langfuse_auth_not_configured => {
+            next.run(request).await
+        }
+        _ => (
+            StatusCode::UNAUTHORIZED,
+            Json(ApiResponse::<serde_json::Value> {
+                message: "Unauthorized".to_string(),
+                data: None,
+            }),
+        )
+            .into_response(),
     }
 }
 
@@ -1655,6 +1866,9 @@ struct ObservationsViewDto {
     calculated_total_cost: Option<f64>,
     latency: Option<f64>,
     time_to_first_token: Option<f64>,
+    prompt_tokens: i64,
+    completion_tokens: i64,
+    total_tokens: i64,
     usage_details: JsonValue,
     cost_details: JsonValue,
     environment: String,
@@ -1881,6 +2095,9 @@ ORDER BY start_time NULLS LAST, created_at
                 calculated_total_cost: o.calculated_total_cost,
                 latency: o.latency,
                 time_to_first_token: o.time_to_first_token,
+                prompt_tokens,
+                completion_tokens,
+                total_tokens,
                 environment: o.environment,
             }
         })
