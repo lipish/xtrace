@@ -35,7 +35,7 @@ class XTraceClient:
         request_timeout_s: float = 2.0,
         max_retries: int = 3,
     ) -> None:
-        base_url = base_url or os.environ.get("XTRACE_BASE_URL") or "http://127.0.0.1:8080"
+        base_url = base_url or os.environ.get("XTRACE_BASE_URL") or "http://127.0.0.1:8742"
         api_key = api_key or os.environ.get("XTRACE_API_KEY") or os.environ.get("XTRACE_BEARER_TOKEN")
         if not api_key:
             raise ValueError("missing api_key (env XTRACE_API_KEY or XTRACE_BEARER_TOKEN)")

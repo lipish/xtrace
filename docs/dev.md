@@ -50,7 +50,7 @@ cargo install sqlx-cli --no-default-features --features native-tls,postgres
 
 - `DATABASE_URL`：例如 `postgres://user:pass@127.0.0.1:5432/xtrace`
 - `API_BEARER_TOKEN`：对外 API 的 Bearer Token（MVP 先用单一 token）
-- `BIND_ADDR`：监听地址，默认 `127.0.0.1:8080`
+- `BIND_ADDR`：监听地址，默认 `127.0.0.1:8742`
 
 兼容 Langfuse public API 的 BasicAuth（可选）：
 
@@ -87,7 +87,7 @@ sqlx migrate run
 ```bash
 export DATABASE_URL=postgres://user:pass@127.0.0.1:5432/xtrace
 export API_BEARER_TOKEN=dev-token
-export BIND_ADDR=127.0.0.1:8080
+export BIND_ADDR=127.0.0.1:8742
 cargo run -p xtrace-api
 ```
 
@@ -136,11 +136,11 @@ cargo run -p xtrace-api
 
 下面示例假设：
 
-`API_BEARER_TOKEN=dev-token`，服务监听 `127.0.0.1:8080`。
+`API_BEARER_TOKEN=dev-token`，服务监听 `127.0.0.1:8742`。
 
 ```bash
 export API_BEARER_TOKEN=dev-token
-export BASE_URL=http://127.0.0.1:8080
+export BASE_URL=http://127.0.0.1:8742
 
 # 如需用 BasicAuth（兼容 xinference/langfuse 调用方式）
 # export XTRACE_PUBLIC_KEY=pk-xxx

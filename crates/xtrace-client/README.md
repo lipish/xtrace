@@ -18,7 +18,7 @@ use xtrace_client::{Client, TraceListQuery};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let client = Client::new("http://127.0.0.1:8080/", "YOUR_TOKEN")?;
+    let client = Client::new("http://127.0.0.1:8742/", "YOUR_TOKEN")?;
 
     client.healthz().await?;
 

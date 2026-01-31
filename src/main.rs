@@ -745,7 +745,7 @@ async fn main() -> anyhow::Result<()> {
     let langfuse_secret_key = std::env::var("XTRACE_SECRET_KEY")
         .ok()
         .or_else(|| std::env::var("LANGFUSE_SECRET_KEY").ok());
-    let bind_addr = std::env::var("BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
+    let bind_addr = std::env::var("BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:8742".to_string());
     let default_project_id =
         std::env::var("DEFAULT_PROJECT_ID").unwrap_or_else(|_| "default".to_string());
 

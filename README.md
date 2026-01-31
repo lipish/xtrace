@@ -11,7 +11,7 @@ xtrace 是一个用于 AI/LLM 可观测性的服务端组件，用于采集、�
 环境变量：
 `DATABASE_URL`（必填）
 `API_BEARER_TOKEN`（必填，用于保护接口）
-`BIND_ADDR`（可选，默认 `127.0.0.1:8080`）
+`BIND_ADDR`（可选，默认 `127.0.0.1:8742`）
 `DEFAULT_PROJECT_ID`（可选，默认 `default`）
 `XTRACE_PUBLIC_KEY`（可选，用于兼容 Langfuse public API BasicAuth）
 `XTRACE_SECRET_KEY`（可选，用于兼容 Langfuse public API BasicAuth）
@@ -28,7 +28,7 @@ cargo run --release
 
 健康检查：
 ```bash
-curl http://127.0.0.1:8080/healthz
+curl http://127.0.0.1:8742/healthz
 ```
 
 ## HTTP API（核心路由）
@@ -79,7 +79,7 @@ curl http://127.0.0.1:8080/healthz
 示例：
 ```bash
 curl -H "Authorization: Bearer $API_BEARER_TOKEN" \
-  "http://127.0.0.1:8080/api/public/traces?page=1&limit=50"
+  "http://127.0.0.1:8742/api/public/traces?page=1&limit=50"
 ```
 
 ## Rust SDK（xtrace-client）
@@ -98,7 +98,7 @@ use xtrace_client::{Client, TraceListQuery};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let client = Client::new("http://127.0.0.1:8080/", "YOUR_TOKEN")?;
+    let client = Client::new("http://127.0.0.1:8742/", "YOUR_TOKEN")?;
     client.healthz().await?;
 
     let traces = client.list_traces(&TraceListQuery::default()).await?;
