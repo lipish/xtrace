@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
+trap 'code=$?; echo "deploy failed: line=${LINENO} cmd=${BASH_COMMAND}" >&2; exit $code' ERR
 : # 默认部署用户
 DEPLOY_USER="${DEPLOY_USER:-ubuntu}"
 : "${DEPLOY_SSH_KEY:?}"
@@ -7,14 +8,40 @@ DEPLOY_HOST="${DEPLOY_HOST:-52.83.216.97}"
 DEPLOY_PORT="${DEPLOY_PORT:-22}"
 ARTIFACT_FILE="${ARTIFACT_FILE:-xtrace.tar.gz}"
 APP_DIR_REMOTE="${APP_DIR_REMOTE:-}"
+
+if [ -z "${DEPLOY_HOST}" ]; then
+  echo "DEPLOY_HOST is empty" >&2
+  exit 1
+fi
+if [ -z "${DEPLOY_USER}" ]; then
+  echo "DEPLOY_USER is empty" >&2
+  exit 1
+fi
+if [ -z "${DEPLOY_PORT}" ] || ! [[ "${DEPLOY_PORT}" =~ ^[0-9]+$ ]]; then
+  DEPLOY_PORT="22"
+fi
+if [ ! -f "${ARTIFACT_FILE}" ]; then
+  echo "Artifact not found: ${ARTIFACT_FILE}" >&2
+  exit 1
+fi
+if [ ! -s "${ARTIFACT_FILE}" ]; then
+  echo "Artifact is empty: ${ARTIFACT_FILE}" >&2
+  exit 1
+fi
+
+echo "Deploying artifact=${ARTIFACT_FILE} to ${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_PORT} app_dir=${APP_DIR_REMOTE:-\$HOME/xtrace}"
+
 KEY_FILE="$(mktemp)"
 trap 'rm -f "$KEY_FILE"' EXIT
 printf "%s\n" "$DEPLOY_SSH_KEY" > "$KEY_FILE"
 chmod 600 "$KEY_FILE"
 scp -P "$DEPLOY_PORT" -i "$KEY_FILE" -o StrictHostKeyChecking=no "$ARTIFACT_FILE" "$DEPLOY_USER@$DEPLOY_HOST:/tmp/xtrace.tar.gz"
-ssh -p "$DEPLOY_PORT" -i "$KEY_FILE" -o StrictHostKeyChecking=no "$DEPLOY_USER@$DEPLOY_HOST" bash -s <<'REMOTE'
-set -euo pipefail
-APP_DIR="${APP_DIR_REMOTE:-$HOME/xtrace}"
+ssh -p "$DEPLOY_PORT" -i "$KEY_FILE" -o StrictHostKeyChecking=no "$DEPLOY_USER@$DEPLOY_HOST" bash -s -- "$APP_DIR_REMOTE" <<'REMOTE'
+set -Eeuo pipefail
+trap 'code=$?; echo "deploy remote failed: line=${LINENO} cmd=${BASH_COMMAND}" >&2; exit $code' ERR
+
+APP_DIR_REMOTE_ARG="${1:-}"
+APP_DIR="${APP_DIR_REMOTE_ARG:-$HOME/xtrace}"
 mkdir -p "$APP_DIR"
 tar -xzf /tmp/xtrace.tar.gz -C "$APP_DIR"
 chmod +x "$APP_DIR/xtrace"
