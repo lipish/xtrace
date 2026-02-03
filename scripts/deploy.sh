@@ -56,13 +56,15 @@ fi
 trap_restore_err="$(trap -p ERR || true)"
 
 trap - ERR
-if ! scp_out="$(scp "${SCP_ARGS[@]}" "$ARTIFACT_FILE" "$DEPLOY_USER@$DEPLOY_HOST:/tmp/xtrace.tar.gz" 2>&1)"; then
-  echo "scp failed (exit=$?) output:" >&2
+scp_out="$(scp "${SCP_ARGS[@]}" "$ARTIFACT_FILE" "$DEPLOY_USER@$DEPLOY_HOST:/tmp/xtrace.tar.gz" 2>&1)"
+scp_status=$?
+if [ "$scp_status" -ne 0 ]; then
+  echo "scp failed (exit=$scp_status) output:" >&2
   echo "$scp_out" >&2
-  exit 1
+  exit "$scp_status"
 fi
 
-if ! ssh_out="$(
+ssh_out="$(
   ssh "${SSH_ARGS[@]}" "$DEPLOY_USER@$DEPLOY_HOST" bash -s -- "$APP_DIR_REMOTE" "$DEPLOY_SSH_VERBOSE" 2>&1 <<'REMOTE'
 set -Eeuo pipefail
 on_err_remote() {
@@ -110,25 +112,6 @@ if [ ! -x "$APP_DIR/xtrace" ]; then
     exit 1
   fi
 fi
-cat > "$APP_DIR/ecosystem.config.js" <<EOF
-module.exports = {
-  apps: [{
-    name: "xtrace",
-    script: "$SCRIPT_PATH",
-    interpreter: "none",
-    cwd: process.env.APP_DIR || ".",
-    env: {
-      DATABASE_URL: process.env.DATABASE_URL,
-      API_BEARER_TOKEN: process.env.API_BEARER_TOKEN,
-      BIND_ADDR: "0.0.0.0:8742"
-    },
-    instances: 1,
-    autorestart: true,
-    max_restarts: 10
-  }]
-}
-EOF
-export APP_DIR="$APP_DIR"
 cd "$APP_DIR"
 ENV_FILE="$APP_DIR/.env"
 if [ -f "$ENV_FILE" ]; then
@@ -145,18 +128,39 @@ if [ -z "${DATABASE_URL:-}" ] || [ -z "${API_BEARER_TOKEN:-}" ]; then
 fi
 export DATABASE_URL
 export API_BEARER_TOKEN
+export BIND_ADDR="${BIND_ADDR:-0.0.0.0:8742}"
 pid="$(pm2 pid xtrace || true)"
 if [ "${pid:-0}" = "0" ] || [ -z "${pid:-}" ]; then
-  pm2 start ecosystem.config.js --only xtrace --update-env
+  pm2 start "$SCRIPT_PATH" --name xtrace --interpreter none --cwd "$APP_DIR" --update-env
 else
   pm2 restart xtrace --update-env
 fi
 pm2 save
-REMOTE
-)"; then
-  echo "ssh failed (exit=$?) output:" >&2
-  echo "$ssh_out" >&2
+
+pid="$(pm2 pid xtrace || true)"
+if [ "${pid:-0}" = "0" ] || [ -z "${pid:-}" ]; then
+  echo "pm2 started but xtrace has no pid; dumping last logs" >&2
+  pm2 logs xtrace --lines 120 >&2 || true
   exit 1
+fi
+
+if command -v curl >/dev/null 2>&1; then
+  for _ in 1 2 3 4 5; do
+    if curl -fsS "http://127.0.0.1:8742/healthz" >/dev/null; then
+      exit 0
+    fi
+    sleep 1
+  done
+  echo "healthz check failed on 127.0.0.1:8742; dumping last logs" >&2
+  pm2 logs xtrace --lines 120 >&2 || true
+  exit 1
+fi
+REMOTE
+)"; ssh_status=$?
+if [ "$ssh_status" -ne 0 ]; then
+  echo "ssh failed (exit=$ssh_status) output:" >&2
+  echo "$ssh_out" >&2
+  exit "$ssh_status"
 fi
 
 if [ -n "${trap_restore_err}" ]; then
