@@ -4,9 +4,8 @@ on_err() {
   local code="$?"
   local line="${BASH_LINENO[0]:-${LINENO}}"
   local cmd="${BASH_COMMAND:-}"
-  cmd="${cmd//$'\n'/ ; }"
-  if [ "${#cmd}" -gt 240 ]; then
-    cmd="${cmd:0:240}..."
+  if [ "${#cmd}" -gt 200 ]; then
+    cmd="${cmd:0:200}..."
   fi
   echo "deploy failed: exit=${code} line=${line} cmd=${cmd}" >&2
   exit "$code"
@@ -54,8 +53,17 @@ if [ "${DEPLOY_SSH_VERBOSE}" != "0" ]; then
   SCP_ARGS=(-vv "${SCP_ARGS[@]}")
 fi
 
-scp "${SCP_ARGS[@]}" "$ARTIFACT_FILE" "$DEPLOY_USER@$DEPLOY_HOST:/tmp/xtrace.tar.gz"
-ssh "${SSH_ARGS[@]}" "$DEPLOY_USER@$DEPLOY_HOST" bash -s -- "$APP_DIR_REMOTE" "$DEPLOY_SSH_VERBOSE" <<'REMOTE'
+trap_restore_err="$(trap -p ERR || true)"
+
+trap - ERR
+if ! scp_out="$(scp "${SCP_ARGS[@]}" "$ARTIFACT_FILE" "$DEPLOY_USER@$DEPLOY_HOST:/tmp/xtrace.tar.gz" 2>&1)"; then
+  echo "scp failed (exit=$?) output:" >&2
+  echo "$scp_out" >&2
+  exit 1
+fi
+
+if ! ssh_out="$(
+  ssh "${SSH_ARGS[@]}" "$DEPLOY_USER@$DEPLOY_HOST" bash -s -- "$APP_DIR_REMOTE" "$DEPLOY_SSH_VERBOSE" 2>&1 <<'REMOTE'
 set -Eeuo pipefail
 on_err_remote() {
   local code="$?"
@@ -145,3 +153,12 @@ else
 fi
 pm2 save
 REMOTE
+)"; then
+  echo "ssh failed (exit=$?) output:" >&2
+  echo "$ssh_out" >&2
+  exit 1
+fi
+
+if [ -n "${trap_restore_err}" ]; then
+  eval "${trap_restore_err}"
+fi
