@@ -53,19 +53,18 @@ if [ "${DEPLOY_SSH_VERBOSE}" != "0" ]; then
   SCP_ARGS=(-vv "${SCP_ARGS[@]}")
 fi
 
-trap_restore_err="$(trap -p ERR || true)"
-
-trap - ERR
+set +e
 scp_out="$(scp "${SCP_ARGS[@]}" "$ARTIFACT_FILE" "$DEPLOY_USER@$DEPLOY_HOST:/tmp/xtrace.tar.gz" 2>&1)"
-scp_status=$?
+scp_status="$?"
+set -e
 if [ "$scp_status" -ne 0 ]; then
   echo "scp failed (exit=$scp_status) output:" >&2
   echo "$scp_out" >&2
   exit "$scp_status"
 fi
 
-ssh_out="$(
-  ssh "${SSH_ARGS[@]}" "$DEPLOY_USER@$DEPLOY_HOST" bash -s -- "$APP_DIR_REMOTE" "$DEPLOY_SSH_VERBOSE" 2>&1 <<'REMOTE'
+set +e
+ssh_out="$(ssh "${SSH_ARGS[@]}" "$DEPLOY_USER@$DEPLOY_HOST" bash -s -- "$APP_DIR_REMOTE" "$DEPLOY_SSH_VERBOSE" 2>&1 <<'REMOTE'
 set -Eeuo pipefail
 on_err_remote() {
   local code="$?"
@@ -156,13 +155,14 @@ if command -v curl >/dev/null 2>&1; then
   exit 1
 fi
 REMOTE
-)"; ssh_status=$?
+)"; ssh_status="$?"
+set -e
 if [ "$ssh_status" -ne 0 ]; then
   echo "ssh failed (exit=$ssh_status) output:" >&2
   echo "$ssh_out" >&2
   exit "$ssh_status"
 fi
 
-if [ -n "${trap_restore_err}" ]; then
-  eval "${trap_restore_err}"
+if [ "${DEPLOY_SSH_VERBOSE}" != "0" ] && [ -n "${ssh_out}" ]; then
+  echo "$ssh_out"
 fi
