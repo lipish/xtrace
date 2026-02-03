@@ -19,7 +19,18 @@ mkdir -p "$APP_DIR"
 tar -xzf /tmp/xtrace.tar.gz -C "$APP_DIR"
 chmod +x "$APP_DIR/xtrace"
 if ! command -v pm2 >/dev/null 2>&1; then
-  npm i -g pm2
+  NVM_DIR="$HOME/.nvm"
+  if [ -s "$NVM_DIR/nvm.sh" ]; then . "$NVM_DIR/nvm.sh"; fi
+  if command -v nvm >/dev/null 2>&1; then nvm use --lts >/dev/null 2>&1 || nvm use default >/dev/null 2>&1; fi
+fi
+if ! command -v pm2 >/dev/null 2>&1; then
+  if command -v npm >/dev/null 2>&1; then
+    npm i -g pm2
+  fi
+fi
+if ! command -v pm2 >/dev/null 2>&1; then
+  echo "pm2 not found in PATH" >&2
+  exit 1
 fi
 SCRIPT_PATH="./xtrace"
 if [ ! -x "$APP_DIR/xtrace" ]; then
