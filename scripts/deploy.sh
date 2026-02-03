@@ -12,9 +12,9 @@ trap 'rm -f "$KEY_FILE"' EXIT
 printf "%s\n" "$DEPLOY_SSH_KEY" > "$KEY_FILE"
 chmod 600 "$KEY_FILE"
 scp -P "$DEPLOY_PORT" -i "$KEY_FILE" -o StrictHostKeyChecking=no "$ARTIFACT_FILE" "$DEPLOY_USER@$DEPLOY_HOST:/tmp/xtrace.tar.gz"
-ssh -p "$DEPLOY_PORT" -i "$KEY_FILE" -o StrictHostKeyChecking=no "$DEPLOY_USER@$DEPLOY_HOST" "APP_DIR_REMOTE='$APP_DIR_REMOTE' DEPLOY_DATABASE_URL='$DEPLOY_DATABASE_URL' DEPLOY_API_BEARER_TOKEN='$DEPLOY_API_BEARER_TOKEN' bash -s" <<'REMOTE'
+ssh -p "$DEPLOY_PORT" -i "$KEY_FILE" -o StrictHostKeyChecking=no "$DEPLOY_USER@$DEPLOY_HOST" "APP_DIR_REMOTE='$APP_DIR_REMOTE' bash -s" <<'REMOTE'
 set -euo pipefail
-APP_DIR="${APP_DIR_REMOTE:-$HOME/apps/xtrace}"
+APP_DIR="${APP_DIR_REMOTE:-$HOME/xtrace}"
 mkdir -p "$APP_DIR"
 tar -xzf /tmp/xtrace.tar.gz -C "$APP_DIR"
 chmod +x "$APP_DIR/xtrace"
@@ -55,9 +55,14 @@ if [ -f "$ENV_FILE" ]; then
   set -a
   . "$ENV_FILE"
   set +a
+else
+  echo ".env not found at $ENV_FILE" >&2
+  exit 1
 fi
-DATABASE_URL="${DATABASE_URL:-$DEPLOY_DATABASE_URL}"
-API_BEARER_TOKEN="${API_BEARER_TOKEN:-$DEPLOY_API_BEARER_TOKEN}"
+if [ -z "${DATABASE_URL:-}" ] || [ -z "${API_BEARER_TOKEN:-}" ]; then
+  echo "Missing DATABASE_URL or API_BEARER_TOKEN in $ENV_FILE" >&2
+  exit 1
+fi
 export DATABASE_URL
 export API_BEARER_TOKEN
 pid="$(pm2 pid xtrace || true)"
