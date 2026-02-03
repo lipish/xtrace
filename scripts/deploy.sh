@@ -6,13 +6,13 @@ DEPLOY_USER="${DEPLOY_USER:-ubuntu}"
 DEPLOY_HOST="${DEPLOY_HOST:-52.83.216.97}"
 DEPLOY_PORT="${DEPLOY_PORT:-22}"
 ARTIFACT_FILE="${ARTIFACT_FILE:-xtrace.tar.gz}"
-APP_DIR_REMOTE="${APP_DIR_REMOTE:-$HOME/xtrace}"
+APP_DIR_REMOTE="${APP_DIR_REMOTE:-}"
 KEY_FILE="$(mktemp)"
 trap 'rm -f "$KEY_FILE"' EXIT
 printf "%s\n" "$DEPLOY_SSH_KEY" > "$KEY_FILE"
 chmod 600 "$KEY_FILE"
 scp -P "$DEPLOY_PORT" -i "$KEY_FILE" -o StrictHostKeyChecking=no "$ARTIFACT_FILE" "$DEPLOY_USER@$DEPLOY_HOST:/tmp/xtrace.tar.gz"
-ssh -p "$DEPLOY_PORT" -i "$KEY_FILE" -o StrictHostKeyChecking=no "$DEPLOY_USER@$DEPLOY_HOST" "APP_DIR_REMOTE='$APP_DIR_REMOTE' bash -s" <<'REMOTE'
+ssh -p "$DEPLOY_PORT" -i "$KEY_FILE" -o StrictHostKeyChecking=no "$DEPLOY_USER@$DEPLOY_HOST" bash -s <<'REMOTE'
 set -euo pipefail
 APP_DIR="${APP_DIR_REMOTE:-$HOME/xtrace}"
 mkdir -p "$APP_DIR"
