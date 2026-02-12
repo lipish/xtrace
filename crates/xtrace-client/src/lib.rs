@@ -2,6 +2,7 @@ use chrono::{DateTime, Utc};
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
+use std::collections::HashMap;
 use std::time::Duration;
 use url::Url;
 use uuid::Uuid;
@@ -145,6 +146,35 @@ impl Client {
         let res = self.http.get(url).send().await?.error_for_status()?;
         Ok(res.json::<PagedData<MetricsDailyItem>>().await?)
     }
+
+    pub async fn push_metrics(&self, metrics: &[MetricPoint]) -> Result<ApiResponse<JsonValue>, Error> {
+        let url = self.base_url.join("v1/metrics/batch")?;
+        let req = MetricsBatchRequest {
+            metrics: metrics.to_vec(),
+        };
+        let res = self
+            .http
+            .post(url)
+            .json(&req)
+            .send()
+            .await?
+            .error_for_status()?;
+        Ok(res.json::<ApiResponse<JsonValue>>().await?)
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct MetricPoint {
+    pub name: String,
+    #[serde(default)]
+    pub labels: HashMap<String, String>,
+    pub value: f64,
+    pub timestamp: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+struct MetricsBatchRequest {
+    metrics: Vec<MetricPoint>,
 }
 
 #[derive(Debug, Deserialize)]

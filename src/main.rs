@@ -16,7 +16,7 @@ use prost::Message;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use sqlx::{postgres::PgPoolOptions, PgPool, QueryBuilder};
-use std::{collections::HashSet, net::SocketAddr, sync::Arc};
+use std::{collections::BTreeMap, collections::HashMap, collections::HashSet, net::SocketAddr, sync::Arc};
 use thiserror::Error;
 use std::io::Read;
 use tokio::sync::mpsc;
@@ -33,6 +33,49 @@ struct AppState {
     langfuse_secret_key: Option<Arc<str>>,
     default_project_id: Arc<str>,
     ingest_tx: mpsc::Sender<BatchIngestRequest>,
+    metrics_tx: mpsc::Sender<MetricsBatchRequest>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MetricsBatchRequest {
+    metrics: Vec<MetricPointIngest>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MetricPointIngest {
+    name: String,
+    #[serde(default)]
+    labels: HashMap<String, String>,
+    value: f64,
+    timestamp: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+#[allow(non_snake_case)]
+struct MetricsQuery {
+    name: String,
+    from: Option<DateTime<Utc>>,
+    to: Option<DateTime<Utc>>,
+    labels: Option<String>,
+    step: Option<String>,
+    agg: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct MetricValuePoint {
+    timestamp: String,
+    value: f64,
+}
+
+#[derive(Debug, Serialize)]
+struct MetricsSeries {
+    labels: JsonValue,
+    values: Vec<MetricValuePoint>,
+}
+
+#[derive(Debug, Serialize)]
+struct MetricsQueryResponse {
+    data: Vec<MetricsSeries>,
 }
 
 #[derive(Debug, Serialize)]
@@ -757,6 +800,7 @@ async fn main() -> anyhow::Result<()> {
     sqlx::migrate!("./migrations").run(&pool).await?;
 
     let (ingest_tx, ingest_rx) = mpsc::channel::<BatchIngestRequest>(1000);
+    let (metrics_tx, metrics_rx) = mpsc::channel::<MetricsBatchRequest>(5000);
 
     let state = AppState {
         pool,
@@ -765,6 +809,7 @@ async fn main() -> anyhow::Result<()> {
         langfuse_secret_key: langfuse_secret_key.map(Arc::from),
         default_project_id: Arc::from(default_project_id),
         ingest_tx,
+        metrics_tx,
     };
 
     tokio::spawn(ingest_worker(
@@ -773,11 +818,20 @@ async fn main() -> anyhow::Result<()> {
         ingest_rx,
     ));
 
+    tokio::spawn(metrics_worker(
+        state.pool.clone(),
+        state.default_project_id.clone(),
+        metrics_rx,
+    ));
+
     let protected_routes = Router::new()
         .route("/v1/l/batch", post(post_batch))
+        .route("/v1/metrics/batch", post(post_metrics_batch))
         .route("/api/public/projects", get(get_projects))
         .route("/api/public/otel/v1/traces", post(post_otel_traces))
         .route("/api/public/metrics/daily", get(get_metrics_daily))
+        .route("/api/public/metrics/query", get(get_metrics_query))
+        .route("/api/public/metrics/names", get(get_metrics_names))
         .route("/api/public/traces", get(get_traces))
         .route("/api/public/traces/:traceId", get(get_trace))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth));
@@ -1077,6 +1131,247 @@ async fn post_batch(
         Err(mpsc::error::TrySendError::Full(_)) => Err(ApiError::TooManyRequests),
         Err(mpsc::error::TrySendError::Closed(_)) => Err(ApiError::ServiceUnavailable),
     }
+}
+
+async fn post_metrics_batch(
+    State(state): State<AppState>,
+    Json(payload): Json<MetricsBatchRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    match state.metrics_tx.try_send(payload) {
+        Ok(()) => Ok((
+            StatusCode::OK,
+            Json(ApiResponse::<serde_json::Value> {
+                message: "Request Successful.".to_string(),
+                data: None,
+            }),
+        )),
+        Err(mpsc::error::TrySendError::Full(_)) => Err(ApiError::TooManyRequests),
+        Err(mpsc::error::TrySendError::Closed(_)) => Err(ApiError::ServiceUnavailable),
+    }
+}
+
+fn labels_to_json(labels: HashMap<String, String>) -> JsonValue {
+    let mut m = serde_json::Map::with_capacity(labels.len());
+    for (k, v) in labels {
+        m.insert(k, JsonValue::String(v));
+    }
+    JsonValue::Object(m)
+}
+
+async fn metrics_worker(
+    pool: PgPool,
+    default_project_id: Arc<str>,
+    mut rx: mpsc::Receiver<MetricsBatchRequest>,
+) {
+    const MAX_BATCHES: usize = 200;
+    let window = Duration::from_millis(50);
+
+    while let Some(first) = rx.recv().await {
+        let mut batches = Vec::with_capacity(MAX_BATCHES);
+        batches.push(first);
+
+        let start = tokio::time::Instant::now();
+        while batches.len() < MAX_BATCHES {
+            let elapsed = start.elapsed();
+            let remaining = match window.checked_sub(elapsed) {
+                Some(r) if !r.is_zero() => r,
+                _ => break,
+            };
+
+            match tokio::time::timeout(remaining, rx.recv()).await {
+                Ok(Some(p)) => batches.push(p),
+                Ok(None) => break,
+                Err(_) => break,
+            }
+        }
+
+        if let Err(err) = write_metrics_batches(&pool, default_project_id.as_ref(), batches).await {
+            tracing::error!(error = ?err, "failed to write metrics batch");
+        }
+    }
+}
+
+async fn write_metrics_batches(
+    pool: &PgPool,
+    default_project_id: &str,
+    payloads: Vec<MetricsBatchRequest>,
+) -> Result<(), sqlx::Error> {
+    let mut points: Vec<MetricPointIngest> = Vec::new();
+    for p in payloads {
+        points.extend(p.metrics);
+    }
+    if points.is_empty() {
+        return Ok(());
+    }
+
+    let mut tx = pool.begin().await?;
+
+    let mut builder: QueryBuilder<'_, sqlx::Postgres> = QueryBuilder::new(
+        "INSERT INTO metrics (project_id, environment, name, labels, value, timestamp) ",
+    );
+    builder.push_values(points.into_iter(), |mut b, m| {
+        b.push_bind(default_project_id.to_string())
+            .push_bind("default".to_string())
+            .push_bind(m.name)
+            .push_bind(labels_to_json(m.labels))
+            .push_bind(m.value)
+            .push_bind(m.timestamp);
+    });
+
+    builder.build().execute(&mut *tx).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+fn parse_step_seconds(step: Option<&str>) -> Result<i64, ApiError> {
+    let step = step.unwrap_or("1m").trim();
+    let secs = match step {
+        "1m" => 60,
+        "5m" => 300,
+        "1h" => 3600,
+        "1d" => 86400,
+        _ => {
+            return Err(ApiError::BadRequest(
+                "invalid step, must be one of: 1m, 5m, 1h, 1d".to_string(),
+            ))
+        }
+    };
+    Ok(secs)
+}
+
+fn parse_agg(agg: Option<&str>) -> Result<&'static str, ApiError> {
+    let agg = agg.unwrap_or("avg").trim().to_ascii_lowercase();
+    match agg.as_str() {
+        "avg" => Ok("avg"),
+        "max" => Ok("max"),
+        "min" => Ok("min"),
+        "sum" => Ok("sum"),
+        "last" => Ok("last"),
+        _ => Err(ApiError::BadRequest(
+            "invalid agg, must be one of: avg, max, min, sum, last".to_string(),
+        )),
+    }
+}
+
+async fn get_metrics_names(State(state): State<AppState>) -> Result<impl IntoResponse, ApiError> {
+    let project_id = state.default_project_id.as_ref();
+
+    let names: Vec<String> = sqlx::query_scalar(
+        r#"
+SELECT DISTINCT name
+FROM metrics
+WHERE project_id = $1 AND environment = 'default'
+ORDER BY name
+        "#,
+    )
+    .bind(project_id)
+    .fetch_all(&state.pool)
+    .await?;
+
+    Ok((StatusCode::OK, Json(serde_json::json!({ "data": names }))))
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct MetricsQueryRow {
+    bucket_ts: DateTime<Utc>,
+    labels: JsonValue,
+    value: f64,
+}
+
+async fn get_metrics_query(
+    State(state): State<AppState>,
+    Query(q): Query<MetricsQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    let now = Utc::now();
+    let to_ts = q.to.unwrap_or(now);
+    let from_ts = q
+        .from
+        .unwrap_or_else(|| to_ts - chrono::Duration::hours(1));
+
+    if from_ts > to_ts {
+        return Err(ApiError::BadRequest("from must be <= to".to_string()));
+    }
+
+    let step_seconds = parse_step_seconds(q.step.as_deref())?;
+    let agg = parse_agg(q.agg.as_deref())?;
+
+    let labels_filter: Option<JsonValue> = match q.labels.as_deref() {
+        Some(s) if !s.trim().is_empty() => Some(
+            serde_json::from_str::<JsonValue>(s)
+                .map_err(|e| ApiError::BadRequest(format!("invalid labels json: {e}")))?,
+        ),
+        _ => None,
+    };
+
+    let project_id = state.default_project_id.as_ref();
+
+    let agg_expr = match agg {
+        "avg" => "AVG(value)::DOUBLE PRECISION",
+        "max" => "MAX(value)::DOUBLE PRECISION",
+        "min" => "MIN(value)::DOUBLE PRECISION",
+        "sum" => "SUM(value)::DOUBLE PRECISION",
+        "last" => "(ARRAY_AGG(value ORDER BY timestamp DESC))[1]::DOUBLE PRECISION",
+        _ => unreachable!(),
+    };
+
+    const MAX_POINTS_PER_SERIES: usize = 1000;
+    const MAX_SERIES: usize = 50;
+
+    let mut builder: QueryBuilder<'_, sqlx::Postgres> = QueryBuilder::new(
+        "WITH filtered AS (\n  SELECT\n    to_timestamp(floor(extract(epoch from timestamp) / ",
+    );
+    builder.push_bind(step_seconds);
+    builder.push(
+        ") * ",
+    );
+    builder.push_bind(step_seconds);
+    builder.push(
+        ") AS bucket_ts,\n    labels,\n    value,\n    timestamp\n  FROM metrics\n  WHERE project_id = ",
+    );
+    builder.push_bind(project_id);
+    builder.push(" AND environment = 'default'");
+    builder.push(" AND name = ");
+    builder.push_bind(q.name);
+    builder.push(" AND timestamp >= ");
+    builder.push_bind(from_ts);
+    builder.push(" AND timestamp <= ");
+    builder.push_bind(to_ts);
+    if let Some(f) = &labels_filter {
+        builder.push(" AND labels @> ");
+        builder.push_bind(f.clone());
+    }
+    builder.push(
+        ")\nSELECT\n  bucket_ts,\n  labels,\n  ",
+    );
+    builder.push(agg_expr);
+    builder.push(
+        " AS value\nFROM filtered\nGROUP BY bucket_ts, labels\nORDER BY labels, bucket_ts ASC",
+    );
+
+    let rows: Vec<MetricsQueryRow> = builder.build_query_as().fetch_all(&state.pool).await?;
+
+    let mut series_map: BTreeMap<String, MetricsSeries> = BTreeMap::new();
+    for r in rows {
+        let key = r.labels.to_string();
+        let entry = series_map.entry(key).or_insert_with(|| MetricsSeries {
+            labels: r.labels.clone(),
+            values: Vec::new(),
+        });
+
+        if entry.values.len() < MAX_POINTS_PER_SERIES {
+            entry.values.push(MetricValuePoint {
+                timestamp: r.bucket_ts.to_rfc3339(),
+                value: r.value,
+            });
+        }
+    }
+
+    let mut data = series_map.into_values().collect::<Vec<_>>();
+    if data.len() > MAX_SERIES {
+        data.truncate(MAX_SERIES);
+    }
+
+    Ok((StatusCode::OK, Json(MetricsQueryResponse { data })))
 }
 
 async fn ingest_worker(

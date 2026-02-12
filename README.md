@@ -76,6 +76,69 @@ curl http://127.0.0.1:8742/healthz
 `GET /api/public/metrics/daily`
 用于查询按天聚合的指标。
 
+## Nebula 集成（Metrics）
+
+为支持 Nebula 上报 GPU/节点等指标（time-series metrics），xtrace 额外提供一组 metrics 写入与查询接口。
+
+说明：当前实现按“单租户/单 project”方式工作，所有写入的 metrics 会落到 `DEFAULT_PROJECT_ID`，且 `environment` 固定为 `default`。
+
+### 写入
+
+`POST /v1/metrics/batch`
+
+请求体：
+
+```json
+{
+  "metrics": [
+    {
+      "name": "gpu_utilization",
+      "labels": {"node_id": "node-1", "gpu_index": "0"},
+      "value": 85.0,
+      "timestamp": "2026-02-12T12:18:00Z"
+    }
+  ]
+}
+```
+
+示例：
+
+```bash
+NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+curl -H "Authorization: Bearer $API_BEARER_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{\"metrics\":[{\"name\":\"gpu_utilization\",\"labels\":{\"node_id\":\"node-1\",\"gpu_index\":\"0\"},\"value\":85.0,\"timestamp\":\"$NOW\"}]}" \
+  "http://127.0.0.1:8742/v1/metrics/batch"
+```
+
+### 查询
+
+`GET /api/public/metrics/names`
+
+返回当前 project 下所有指标名：
+
+```bash
+curl -H "Authorization: Bearer $API_BEARER_TOKEN" \
+  "http://127.0.0.1:8742/api/public/metrics/names"
+```
+
+`GET /api/public/metrics/query`
+
+参数：
+
+- name（必填）
+- from/to（可选，ISO8601；默认最近 1 小时）
+- labels（可选，JSON 字符串；后端用 `labels @> ...` 过滤）
+- step（可选：1m/5m/1h/1d；默认 1m）
+- agg（可选：avg/max/min/sum/last；默认 avg）
+
+示例：
+
+```bash
+curl -H "Authorization: Bearer $API_BEARER_TOKEN" \
+  "http://127.0.0.1:8742/api/public/metrics/query?name=gpu_utilization&step=1m&agg=last&labels=%7B%22node_id%22%3A%22node-1%22%2C%22gpu_index%22%3A%220%22%7D"
+```
+
 示例：
 ```bash
 curl -H "Authorization: Bearer $API_BEARER_TOKEN" \
@@ -103,6 +166,19 @@ async fn main() -> anyhow::Result<()> {
 
     let traces = client.list_traces(&TraceListQuery::default()).await?;
     println!("{}", traces.data.len());
+
+    let now = chrono::Utc::now();
+    client
+        .push_metrics(&[xtrace_client::MetricPoint {
+            name: "gpu_utilization".to_string(),
+            labels: std::collections::HashMap::from([
+                ("node_id".to_string(), "node-1".to_string()),
+                ("gpu_index".to_string(), "0".to_string()),
+            ]),
+            value: 85.0,
+            timestamp: now,
+        }])
+        .await?;
     Ok(())
 }
 ```
