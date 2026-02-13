@@ -47,7 +47,10 @@ impl Client {
         Ok(())
     }
 
-    pub async fn ingest_batch(&self, req: &BatchIngestRequest) -> Result<ApiResponse<JsonValue>, Error> {
+    pub async fn ingest_batch(
+        &self,
+        req: &BatchIngestRequest,
+    ) -> Result<ApiResponse<JsonValue>, Error> {
         let url = self.base_url.join("v1/l/batch")?;
         let res = self
             .http
@@ -116,7 +119,10 @@ impl Client {
         Ok(res.json::<TraceDetailDto>().await?)
     }
 
-    pub async fn metrics_daily(&self, q: &MetricsDailyQuery) -> Result<PagedData<MetricsDailyItem>, Error> {
+    pub async fn metrics_daily(
+        &self,
+        q: &MetricsDailyQuery,
+    ) -> Result<PagedData<MetricsDailyItem>, Error> {
         let mut url = self.base_url.join("api/public/metrics/daily")?;
         {
             let mut pairs = url.query_pairs_mut();
@@ -147,7 +153,10 @@ impl Client {
         Ok(res.json::<PagedData<MetricsDailyItem>>().await?)
     }
 
-    pub async fn push_metrics(&self, metrics: &[MetricPoint]) -> Result<ApiResponse<JsonValue>, Error> {
+    pub async fn push_metrics(
+        &self,
+        metrics: &[MetricPoint],
+    ) -> Result<ApiResponse<JsonValue>, Error> {
         let url = self.base_url.join("v1/metrics/batch")?;
         let req = MetricsBatchRequest {
             metrics: metrics.to_vec(),
