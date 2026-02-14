@@ -3271,13 +3271,14 @@ checksum = "9edde0db4769d2dc68579893f2306b26c6ecfbe0ef499b013d731b7b9247e0b9"
 
 [[package]]
 name = "xtrace"
-version = "0.0.10"
+version = "0.0.11"
 dependencies = [
  "anyhow",
  "axum",
  "base64",
  "bytes",
  "chrono",
+ "dashmap",
  "flate2",
  "governor",
  "hex",

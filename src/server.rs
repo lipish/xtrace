@@ -19,6 +19,7 @@ use serde_json::Value as JsonValue;
 use sqlx::{postgres::PgPoolOptions, PgPool, QueryBuilder};
 use std::io::Read;
 use std::num::NonZeroU32;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::{
     collections::BTreeMap, collections::HashMap, collections::HashSet, net::SocketAddr, sync::Arc,
 };
@@ -31,6 +32,50 @@ use uuid::Uuid;
 /// Per-token keyed rate limiter (token bucket).
 type KeyedRateLimiter =
     governor::RateLimiter<String, governor::state::keyed::DashMapStateStore<String>, DefaultClock>;
+
+/// In-memory rate-limit hit statistics (lock-free reads, sharded writes).
+struct RateLimitStats {
+    total_allowed: AtomicU64,
+    total_rejected: AtomicU64,
+    /// Per masked-token rejection counts. Key = masked client key.
+    per_token_rejected: dashmap::DashMap<String, u64>,
+}
+
+impl RateLimitStats {
+    fn new() -> Self {
+        Self {
+            total_allowed: AtomicU64::new(0),
+            total_rejected: AtomicU64::new(0),
+            per_token_rejected: dashmap::DashMap::new(),
+        }
+    }
+
+    fn record_allowed(&self) {
+        self.total_allowed.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_rejected(&self, masked_key: &str) {
+        self.total_rejected.fetch_add(1, Ordering::Relaxed);
+        self.per_token_rejected
+            .entry(masked_key.to_string())
+            .and_modify(|c| *c += 1)
+            .or_insert(1);
+    }
+}
+
+/// Mask bearer token for safe exposure: show first 8 chars + "***".
+fn mask_client_key(key: &str) -> String {
+    if let Some(rest) = key.strip_prefix("bearer:") {
+        if rest.len() > 8 {
+            format!("bearer:{}***", &rest[..8])
+        } else {
+            format!("bearer:{rest}***")
+        }
+    } else {
+        // basic auth usernames and "anonymous" are safe to show.
+        key.to_string()
+    }
+}
 
 /// xtrace 服务配置
 pub struct ServerConfig {
@@ -57,10 +102,10 @@ struct AppState {
     metrics_tx: mpsc::Sender<MetricsBatchRequest>,
     /// Per-token query rate limiter.
     query_limiter: Arc<KeyedRateLimiter>,
+    /// Rate-limit hit statistics.
+    rate_limit_stats: Arc<RateLimitStats>,
     /// Configured rate-limit quota (exposed for logging / introspection).
-    #[allow(dead_code)]
     rate_limit_qps: u32,
-    #[allow(dead_code)]
     rate_limit_burst: u32,
 }
 
@@ -836,6 +881,7 @@ pub async fn run_server(config: ServerConfig) -> anyhow::Result<()> {
     let quota = Quota::per_second(NonZeroU32::new(qps).expect("rate_limit_qps must be > 0"))
         .allow_burst(NonZeroU32::new(burst).expect("rate_limit_burst must be > 0"));
     let query_limiter = Arc::new(KeyedRateLimiter::keyed(quota));
+    let rate_limit_stats = Arc::new(RateLimitStats::new());
 
     let state = AppState {
         pool,
@@ -846,6 +892,7 @@ pub async fn run_server(config: ServerConfig) -> anyhow::Result<()> {
         ingest_tx,
         metrics_tx,
         query_limiter,
+        rate_limit_stats,
         rate_limit_qps: qps,
         rate_limit_burst: burst,
     };
@@ -891,6 +938,10 @@ pub async fn run_server(config: ServerConfig) -> anyhow::Result<()> {
 
     let app = Router::new()
         .route("/healthz", get(healthz))
+        .route(
+            "/api/internal/rate_limit_stats",
+            get(get_rate_limit_stats),
+        )
         .merge(protected_routes)
         .with_state(state)
         .layer(TraceLayer::new_for_http());
@@ -929,6 +980,48 @@ async fn shutdown_signal() {
 
 async fn healthz() -> impl IntoResponse {
     StatusCode::OK
+}
+
+/// `GET /api/internal/rate_limit_stats`
+///
+/// Exposes rate-limit hit statistics for operational observability.
+/// No auth required (internal / ops endpoint, like `/healthz`).
+async fn get_rate_limit_stats(State(state): State<AppState>) -> impl IntoResponse {
+    let total_allowed = state.rate_limit_stats.total_allowed.load(Ordering::Relaxed);
+    let total_rejected = state.rate_limit_stats.total_rejected.load(Ordering::Relaxed);
+
+    // Collect per-token stats and sort descending by count.
+    let mut per_token: Vec<(String, u64)> = state
+        .rate_limit_stats
+        .per_token_rejected
+        .iter()
+        .map(|entry| (entry.key().clone(), *entry.value()))
+        .collect();
+    per_token.sort_by(|a, b| b.1.cmp(&a.1));
+
+    // Top 20 tokens.
+    let top = per_token
+        .into_iter()
+        .take(20)
+        .map(|(token, count)| {
+            serde_json::json!({ "token": token, "count": count })
+        })
+        .collect::<Vec<_>>();
+
+    let body = serde_json::json!({
+        "rate_limit_qps": state.rate_limit_qps,
+        "rate_limit_burst": state.rate_limit_burst,
+        "total_allowed": total_allowed,
+        "total_rejected": total_rejected,
+        "rejection_rate": if total_allowed + total_rejected > 0 {
+            total_rejected as f64 / (total_allowed + total_rejected) as f64
+        } else {
+            0.0
+        },
+        "top_rejected_tokens": top,
+    });
+
+    (StatusCode::OK, Json(body))
 }
 
 async fn auth(
@@ -1031,11 +1124,12 @@ async fn rate_limit(
 
     match state.query_limiter.check_key(&key) {
         Ok(_) => {
-            // Allowed — run the handler.
+            state.rate_limit_stats.record_allowed();
             next.run(request).await
         }
         Err(not_until) => {
-            // Rejected — compute Retry-After.
+            let masked = mask_client_key(&key);
+            state.rate_limit_stats.record_rejected(&masked);
             let wait = not_until.wait_time_from(governor::clock::Clock::now(
                 state.query_limiter.clock(),
             ));
