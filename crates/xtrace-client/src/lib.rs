@@ -170,6 +170,44 @@ impl Client {
             .error_for_status()?;
         Ok(res.json::<ApiResponse<JsonValue>>().await?)
     }
+
+    /// Query time-series metrics with optional downsampling and aggregation.
+    pub async fn query_metrics(
+        &self,
+        q: &MetricsQueryParams,
+    ) -> Result<MetricsQueryResponse, Error> {
+        let mut url = self.base_url.join("api/public/metrics/query")?;
+        {
+            let mut pairs = url.query_pairs_mut();
+            pairs.append_pair("name", &q.name);
+            if let Some(v) = q.from.as_ref() {
+                pairs.append_pair("from", &v.to_rfc3339());
+            }
+            if let Some(v) = q.to.as_ref() {
+                pairs.append_pair("to", &v.to_rfc3339());
+            }
+            if let Some(v) = q.labels.as_ref() {
+                pairs.append_pair("labels", &serde_json::to_string(v).unwrap_or_default());
+            }
+            if let Some(v) = q.step.as_deref() {
+                pairs.append_pair("step", v);
+            }
+            if let Some(v) = q.agg.as_deref() {
+                pairs.append_pair("agg", v);
+            }
+        }
+
+        let res = self.http.get(url).send().await?.error_for_status()?;
+        Ok(res.json::<MetricsQueryResponse>().await?)
+    }
+
+    /// List all available metric names.
+    pub async fn list_metric_names(&self) -> Result<Vec<String>, Error> {
+        let url = self.base_url.join("api/public/metrics/names")?;
+        let res = self.http.get(url).send().await?.error_for_status()?;
+        let wrapper = res.json::<MetricNamesResponse>().await?;
+        Ok(wrapper.data)
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -186,9 +224,74 @@ struct MetricsBatchRequest {
     metrics: Vec<MetricPoint>,
 }
 
+/// Parameters for `query_metrics`.
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct MetricsQueryParams {
+    /// Required. Metric name (e.g. `pending_requests`, `kv_cache_usage`).
+    pub name: String,
+    /// Start time (inclusive). Defaults to 1 hour before `to`.
+    #[serde(default)]
+    pub from: Option<DateTime<Utc>>,
+    /// End time (inclusive). Defaults to now.
+    #[serde(default)]
+    pub to: Option<DateTime<Utc>>,
+    /// Label filter as a JSON object (JSONB containment).
+    #[serde(default)]
+    pub labels: Option<HashMap<String, String>>,
+    /// Downsample step: `1m`, `5m`, `1h`, `1d`. Default `1m`.
+    #[serde(default)]
+    pub step: Option<String>,
+    /// Aggregation: `avg`, `max`, `min`, `sum`, `last`. Default `avg`.
+    #[serde(default)]
+    pub agg: Option<String>,
+}
+
+/// A single time-series data point.
+#[derive(Debug, Deserialize, Clone)]
+pub struct MetricValuePoint {
+    pub timestamp: String,
+    pub value: f64,
+}
+
+/// A time-series for one unique label combination.
+#[derive(Debug, Deserialize, Clone)]
+pub struct MetricsSeries {
+    pub labels: JsonValue,
+    pub values: Vec<MetricValuePoint>,
+}
+
+/// Metadata about the metrics query result.
+#[derive(Debug, Deserialize, Clone)]
+pub struct MetricsQueryMeta {
+    /// Timestamp (RFC3339 UTC) of the most recent data point. Absent when no data.
+    #[serde(default)]
+    pub latest_ts: Option<String>,
+    /// Number of distinct series returned.
+    pub series_count: usize,
+    /// `true` when results were truncated due to server limits.
+    pub truncated: bool,
+}
+
+/// Response from `GET /api/public/metrics/query`.
+#[derive(Debug, Deserialize, Clone)]
+pub struct MetricsQueryResponse {
+    pub data: Vec<MetricsSeries>,
+    pub meta: MetricsQueryMeta,
+}
+
+#[derive(Debug, Deserialize)]
+struct MetricNamesResponse {
+    data: Vec<String>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct ApiResponse<T> {
     pub message: String,
+    /// Machine-readable error code. Present only on error responses.
+    /// Possible values: `UNAUTHORIZED`, `BAD_REQUEST`, `TOO_MANY_REQUESTS`,
+    /// `INTERNAL_ERROR`, `SERVICE_UNAVAILABLE`, `NOT_FOUND`.
+    #[serde(default)]
+    pub code: Option<String>,
     #[serde(default)]
     pub data: Option<T>,
 }

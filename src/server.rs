@@ -85,8 +85,21 @@ struct MetricsSeries {
 }
 
 #[derive(Debug, Serialize)]
+struct MetricsQueryMeta {
+    /// Timestamp of the most recent data point across all series (RFC3339, UTC).
+    /// `None` when no data is returned.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    latest_ts: Option<String>,
+    /// Number of distinct label-combination series returned.
+    series_count: usize,
+    /// `true` when results were truncated due to MAX_SERIES or MAX_POINTS_PER_SERIES limits.
+    truncated: bool,
+}
+
+#[derive(Debug, Serialize)]
 struct MetricsQueryResponse {
     data: Vec<MetricsSeries>,
+    meta: MetricsQueryMeta,
 }
 
 #[derive(Debug, Serialize)]
@@ -915,6 +928,7 @@ async fn auth(
             StatusCode::UNAUTHORIZED,
             Json(ApiResponse::<serde_json::Value> {
                 message: "Unauthorized".to_string(),
+                code: Some("UNAUTHORIZED"),
                 data: None,
             }),
         )
@@ -956,6 +970,8 @@ fn extract_auth(headers: &HeaderMap) -> Result<AuthHeader, ()> {
 #[derive(Debug, Serialize)]
 struct ApiResponse<T> {
     message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    code: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     data: Option<T>,
 }
@@ -1121,6 +1137,7 @@ async fn post_batch(
             StatusCode::OK,
             Json(ApiResponse::<serde_json::Value> {
                 message: "Request Successful.".to_string(),
+                code: None,
                 data: None,
             }),
         )),
@@ -1138,6 +1155,7 @@ async fn post_metrics_batch(
             StatusCode::OK,
             Json(ApiResponse::<serde_json::Value> {
                 message: "Request Successful.".to_string(),
+                code: None,
                 data: None,
             }),
         )),
@@ -1341,7 +1359,17 @@ async fn get_metrics_query(
     let rows: Vec<MetricsQueryRow> = builder.build_query_as().fetch_all(&state.pool).await?;
 
     let mut series_map: BTreeMap<String, MetricsSeries> = BTreeMap::new();
+    let mut points_truncated = false;
+    let mut latest_bucket: Option<DateTime<Utc>> = None;
+
     for r in rows {
+        // Track the most recent bucket timestamp across all series.
+        match latest_bucket {
+            Some(prev) if r.bucket_ts > prev => latest_bucket = Some(r.bucket_ts),
+            None => latest_bucket = Some(r.bucket_ts),
+            _ => {}
+        }
+
         let key = r.labels.to_string();
         let entry = series_map.entry(key).or_insert_with(|| MetricsSeries {
             labels: r.labels.clone(),
@@ -1353,15 +1381,24 @@ async fn get_metrics_query(
                 timestamp: r.bucket_ts.to_rfc3339(),
                 value: r.value,
             });
+        } else {
+            points_truncated = true;
         }
     }
 
     let mut data = series_map.into_values().collect::<Vec<_>>();
-    if data.len() > MAX_SERIES {
+    let series_truncated = data.len() > MAX_SERIES;
+    if series_truncated {
         data.truncate(MAX_SERIES);
     }
 
-    Ok((StatusCode::OK, Json(MetricsQueryResponse { data })))
+    let meta = MetricsQueryMeta {
+        latest_ts: latest_bucket.map(|ts| ts.to_rfc3339()),
+        series_count: data.len(),
+        truncated: points_truncated || series_truncated,
+    };
+
+    Ok((StatusCode::OK, Json(MetricsQueryResponse { data, meta })))
 }
 
 async fn ingest_worker(
@@ -2432,25 +2469,29 @@ impl IntoResponse for ApiError {
             tracing::error!(error = %err, "sqlx error");
         }
 
-        let (status, msg) = match self {
-            ApiError::BadRequest(m) => (StatusCode::BAD_REQUEST, m),
-            ApiError::NotFound => (StatusCode::NOT_FOUND, "Not Found".to_string()),
+        let (status, code, msg) = match self {
+            ApiError::BadRequest(m) => (StatusCode::BAD_REQUEST, "BAD_REQUEST", m),
+            ApiError::NotFound => (StatusCode::NOT_FOUND, "NOT_FOUND", "Not Found".to_string()),
             ApiError::TooManyRequests => (
                 StatusCode::TOO_MANY_REQUESTS,
+                "TOO_MANY_REQUESTS",
                 "Too Many Requests".to_string(),
             ),
             ApiError::ServiceUnavailable => (
                 StatusCode::SERVICE_UNAVAILABLE,
+                "SERVICE_UNAVAILABLE",
                 "Service Unavailable".to_string(),
             ),
             ApiError::Sqlx(_) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
+                "INTERNAL_ERROR",
                 "Internal Error".to_string(),
             ),
         };
 
         let body = Json(ApiResponse::<serde_json::Value> {
             message: msg,
+            code: Some(code),
             data: None,
         });
 
