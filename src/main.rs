@@ -25,6 +25,14 @@ async fn main() -> anyhow::Result<()> {
         langfuse_secret_key: std::env::var("XTRACE_SECRET_KEY")
             .ok()
             .or_else(|| std::env::var("LANGFUSE_SECRET_KEY").ok()),
+        rate_limit_qps: std::env::var("RATE_LIMIT_QPS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(20),
+        rate_limit_burst: std::env::var("RATE_LIMIT_BURST")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(40),
     };
 
     run_server(config).await

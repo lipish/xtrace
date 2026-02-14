@@ -1,6 +1,6 @@
 [package]
 name = "xtrace"
-version = "0.0.9"
+version = "0.0.10"
 edition = "2021"
 
 description = "An AI observability service for collecting, storing, and querying traces, spans, and metrics across LLM and agent workflows."
@@ -35,6 +35,7 @@ opentelemetry-proto = { version = "0.31", features = ["gen-tonic"] }
 prost = "0.14"
 
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono", "json", "migrate"] }
+governor = { version = "0.10.4", features = ["std"] }
 
 [workspace]
 members = ["crates/xtrace-client"]

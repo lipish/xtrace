@@ -139,13 +139,17 @@ HTTP 状态映射：
 
 ## 7) 限流与容量建议（P1）
 
-- 单客户端推荐 QPS（Router）: 建议 ≤ 10 QPS（Router 查询 metrics/query）
-- 单客户端推荐 QPS（Scheduler）: 建议 ≤ 5 QPS
-- burst 限额: **⚠️ 当前无显式 rate limiter。** 仅靠写入通道反压（ingest: 1000, metrics: 5000）。查询侧无限流
-- 超限返回语义: 写入侧返回 429 `{"message": "Too Many Requests", "data": null}`；查询侧当前无限流
-- 建议 backoff 策略: 指数退避，初始 100ms，最大 5s，抖动随机化
-
-**⚠️ 当前差距:** 无基于 IP / token 的 rate limiter。如果 Nebula 有多个 Router/Scheduler 实例并发查询，建议 xtrace 后续加上 per-client QPS 限制。
+- 服务端查询限流: ✅ 已实现 per-token 令牌桶（governor crate）
+- 默认限额: 20 QPS sustained，burst 40（可通过 `RATE_LIMIT_QPS` / `RATE_LIMIT_BURST` 环境变量调整）
+- 限流范围: 仅查询路由（`/api/public/metrics/*`、`/api/public/traces*`），写入路由不受限流影响（使用通道反压）
+- 限流 key: 按认证 token 隔离（Bearer token 或 Basic auth username 各自独立计量）
+- 单客户端推荐 QPS（Router）: ≤ 10 QPS
+- 单客户端推荐 QPS（Scheduler）: ≤ 5 QPS
+- 超限返回语义:
+  - HTTP 429
+  - `Retry-After` 响应头（秒，整数）
+  - Body: `{"message": "Too Many Requests", "code": "TOO_MANY_REQUESTS", "data": null, "meta": {"rate_limit": {"remaining": 0, "reset_at": "<RFC3339>"}}}`
+- 建议 backoff 策略: 读取 `Retry-After` 头作为最小等待时间，叠加随机抖动（±20%），指数退避上限 5s
 
 ## 8) 向后兼容与版本策略（P2）
 
@@ -253,28 +257,44 @@ curl -H "Authorization: Bearer wrong_token" \
 }
 ```
 
-### 5. 限流
+### 5. 限流（查询侧 — per-token 令牌桶）
 
-**触发条件:** metrics 写入通道满（capacity=5000）
+**触发条件:** 同一 token 查询 QPS 超过限额（默认 20 qps, burst 40）
 
 **请求:**
 ```bash
-curl -H "Authorization: Bearer <TOKEN>" \
-  -H "Content-Type: application/json" \
-  -d '{"metrics":[...]}' \
-  "http://127.0.0.1:8742/v1/metrics/batch"
+# 快速连续发送超过 burst 数量的请求
+for i in $(seq 1 50); do
+  curl -s -o /dev/null -w "%{http_code}\n" \
+    -H "Authorization: Bearer <TOKEN>" \
+    "http://127.0.0.1:8742/api/public/metrics/query?name=pending_requests" &
+done
+wait
 ```
 
-**期望响应:** `429 Too Many Requests`
+**期望响应:** 超限请求返回 `429 Too Many Requests`
+
+响应头:
+```
+Retry-After: 1
+```
+
+响应体:
 ```json
 {
   "message": "Too Many Requests",
   "code": "TOO_MANY_REQUESTS",
-  "data": null
+  "data": null,
+  "meta": {
+    "rate_limit": {
+      "remaining": 0,
+      "reset_at": "2026-02-14T10:00:01+00:00"
+    }
+  }
 }
 ```
 
-注：**查询侧当前不会返回 429**，仅写入侧有此行为。
+注：写入侧（`POST /v1/metrics/batch`）使用通道反压，不经过令牌桶限流，超限同样返回 429 但无 `Retry-After` 头。
 
 ### 6. 服务内部错误
 
@@ -339,7 +359,7 @@ curl -H "Authorization: Bearer <TOKEN>" \
 | G1 | 错误响应无 machine-readable `code` 字段 | P0 | ✅ 已实现 | 所有错误响应已增加 `"code"` 字段，枚举值：`UNAUTHORIZED`、`BAD_REQUEST`、`TOO_MANY_REQUESTS`、`INTERNAL_ERROR`、`SERVICE_UNAVAILABLE`、`NOT_FOUND`。正常响应不含 code 字段（skip_serializing_if） |
 | G2 | 无 `X-Request-Id` 响应头 | P1 | 待实现 | 中间件层生成 UUID，写入响应头和日志 |
 | G3 | metrics/query 响应无 freshness 元数据 | P1 | ✅ 已实现 | 响应新增 `meta` 对象，包含 `latest_ts`（最新数据点 UTC 时间戳）、`series_count`、`truncated` |
-| G4 | 查询侧无 rate limiter | P1 | 待实现 | 增加 tower-governor 或类似中间件 |
+| G4 | 查询侧无 rate limiter | P1 | ✅ 已实现 | per-token 令牌桶（governor crate），查询路由 429 + Retry-After |
 | G5 | 无值域校验（kv_cache_usage 允许 > 1） | P2 | 待实现 | 写入侧增加可选校验 |
 | G6 | token 不支持自动轮换 | P2 | 待实现 | 支持多 token 或 JWT |
 | G7 | 数据保留策略未实现 | P2 | 待实现 | 实现 `METRICS_RETENTION_DAYS` 后台清理 |

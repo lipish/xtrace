@@ -11,12 +11,14 @@ use base64::Engine;
 use bytes::Bytes;
 use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 use flate2::read::GzDecoder;
+use governor::{clock::DefaultClock, Quota};
 use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest as PbExportTraceServiceRequest;
 use prost::Message;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use sqlx::{postgres::PgPoolOptions, PgPool, QueryBuilder};
 use std::io::Read;
+use std::num::NonZeroU32;
 use std::{
     collections::BTreeMap, collections::HashMap, collections::HashSet, net::SocketAddr, sync::Arc,
 };
@@ -26,6 +28,10 @@ use tokio::time::Duration;
 use tower_http::trace::TraceLayer;
 use uuid::Uuid;
 
+/// Per-token keyed rate limiter (token bucket).
+type KeyedRateLimiter =
+    governor::RateLimiter<String, governor::state::keyed::DashMapStateStore<String>, DefaultClock>;
+
 /// xtrace 服务配置
 pub struct ServerConfig {
     pub database_url: String,
@@ -34,6 +40,10 @@ pub struct ServerConfig {
     pub default_project_id: String,
     pub langfuse_public_key: Option<String>,
     pub langfuse_secret_key: Option<String>,
+    /// Per-token sustained query rate (requests per second). Default 20.
+    pub rate_limit_qps: u32,
+    /// Per-token burst allowance. Default 40.
+    pub rate_limit_burst: u32,
 }
 
 #[derive(Clone)]
@@ -45,6 +55,13 @@ struct AppState {
     default_project_id: Arc<str>,
     ingest_tx: mpsc::Sender<BatchIngestRequest>,
     metrics_tx: mpsc::Sender<MetricsBatchRequest>,
+    /// Per-token query rate limiter.
+    query_limiter: Arc<KeyedRateLimiter>,
+    /// Configured rate-limit quota (exposed for logging / introspection).
+    #[allow(dead_code)]
+    rate_limit_qps: u32,
+    #[allow(dead_code)]
+    rate_limit_burst: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -814,6 +831,12 @@ pub async fn run_server(config: ServerConfig) -> anyhow::Result<()> {
     let (ingest_tx, ingest_rx) = mpsc::channel::<BatchIngestRequest>(1000);
     let (metrics_tx, metrics_rx) = mpsc::channel::<MetricsBatchRequest>(5000);
 
+    let qps = config.rate_limit_qps;
+    let burst = config.rate_limit_burst;
+    let quota = Quota::per_second(NonZeroU32::new(qps).expect("rate_limit_qps must be > 0"))
+        .allow_burst(NonZeroU32::new(burst).expect("rate_limit_burst must be > 0"));
+    let query_limiter = Arc::new(KeyedRateLimiter::keyed(quota));
+
     let state = AppState {
         pool,
         api_bearer_token: Arc::from(config.api_bearer_token),
@@ -822,6 +845,9 @@ pub async fn run_server(config: ServerConfig) -> anyhow::Result<()> {
         default_project_id: Arc::from(config.default_project_id),
         ingest_tx,
         metrics_tx,
+        query_limiter,
+        rate_limit_qps: qps,
+        rate_limit_burst: burst,
     };
 
     tokio::spawn(ingest_worker(
@@ -836,26 +862,38 @@ pub async fn run_server(config: ServerConfig) -> anyhow::Result<()> {
         metrics_rx,
     ));
 
-    let protected_routes = Router::new()
-        .route("/v1/l/batch", post(post_batch))
-        .route("/v1/metrics/batch", post(post_metrics_batch))
-        .route("/api/public/projects", get(get_projects))
-        .route("/api/public/otel/v1/traces", post(post_otel_traces))
+    // Query routes — apply both auth and per-token rate limiting.
+    let query_routes = Router::new()
         .route("/api/public/metrics/daily", get(get_metrics_daily))
         .route("/api/public/metrics/query", get(get_metrics_query))
         .route("/api/public/metrics/names", get(get_metrics_names))
         .route("/api/public/traces", get(get_traces))
         .route("/api/public/traces/:traceId", get(get_trace))
+        .route_layer(middleware::from_fn_with_state(state.clone(), rate_limit));
+
+    // Write / compat routes — auth only, no rate limit (channel backpressure applies).
+    let write_routes = Router::new()
+        .route("/v1/l/batch", post(post_batch))
+        .route("/v1/metrics/batch", post(post_metrics_batch))
+        .route("/api/public/projects", get(get_projects))
+        .route("/api/public/otel/v1/traces", post(post_otel_traces));
+
+    let protected_routes = Router::new()
+        .merge(query_routes)
+        .merge(write_routes)
         .route_layer(middleware::from_fn_with_state(state.clone(), auth));
+
+    let addr: SocketAddr = config.bind_addr.parse()?;
+    tracing::info!(
+        "listening on {} (rate_limit: {} qps, burst {})",
+        addr, qps, burst
+    );
 
     let app = Router::new()
         .route("/healthz", get(healthz))
         .merge(protected_routes)
         .with_state(state)
         .layer(TraceLayer::new_for_http());
-
-    let addr: SocketAddr = config.bind_addr.parse()?;
-    tracing::info!("listening on {}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app)
@@ -965,6 +1003,69 @@ fn extract_auth(headers: &HeaderMap) -> Result<AuthHeader, ()> {
     }
 
     Err(())
+}
+
+/// Extract the client identity string from Authorization header (for rate-limit keying).
+fn extract_client_key(headers: &HeaderMap) -> String {
+    if let Ok(auth) = extract_auth(headers) {
+        match auth {
+            AuthHeader::Bearer(token) => return format!("bearer:{token}"),
+            AuthHeader::Basic { username, .. } => return format!("basic:{username}"),
+        }
+    }
+    // Fallback: treat unauthenticated requests as a single bucket.
+    "anonymous".to_string()
+}
+
+/// Rate-limiting middleware for query routes.
+///
+/// Uses a per-token keyed token-bucket. On limit exceeded, returns
+/// HTTP 429 with `Retry-After` header and machine-readable `code`.
+async fn rate_limit(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    request: axum::extract::Request,
+    next: Next,
+) -> axum::response::Response {
+    let key = extract_client_key(&headers);
+
+    match state.query_limiter.check_key(&key) {
+        Ok(_) => {
+            // Allowed — run the handler.
+            next.run(request).await
+        }
+        Err(not_until) => {
+            // Rejected — compute Retry-After.
+            let wait = not_until.wait_time_from(governor::clock::Clock::now(
+                state.query_limiter.clock(),
+            ));
+            let retry_after_secs = wait.as_secs().max(1);
+            let reset_at = Utc::now() + chrono::Duration::seconds(retry_after_secs as i64);
+
+            let body = serde_json::json!({
+                "message": "Too Many Requests",
+                "code": "TOO_MANY_REQUESTS",
+                "data": null,
+                "meta": {
+                    "rate_limit": {
+                        "remaining": 0,
+                        "reset_at": reset_at.to_rfc3339(),
+                    }
+                }
+            });
+
+            (
+                StatusCode::TOO_MANY_REQUESTS,
+                [(
+                    header::RETRY_AFTER,
+                    axum::http::HeaderValue::from_str(&retry_after_secs.to_string())
+                        .unwrap_or_else(|_| axum::http::HeaderValue::from_static("1")),
+                )],
+                Json(body),
+            )
+                .into_response()
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]

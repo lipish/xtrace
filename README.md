@@ -15,6 +15,8 @@ xtrace 是一个用于 AI/LLM 可观测性的服务端组件，用于采集、�
 `DEFAULT_PROJECT_ID`（可选，默认 `default`）
 `XTRACE_PUBLIC_KEY`（可选，用于兼容 Langfuse public API BasicAuth）
 `XTRACE_SECRET_KEY`（可选，用于兼容 Langfuse public API BasicAuth）
+`RATE_LIMIT_QPS`（可选，默认 `20`，per-token 查询限流 QPS）
+`RATE_LIMIT_BURST`（可选，默认 `40`，per-token 查询限流 burst 上限）
 
 兼容：
 也支持旧命名 `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY`。
