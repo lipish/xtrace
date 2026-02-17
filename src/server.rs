@@ -77,7 +77,7 @@ fn mask_client_key(key: &str) -> String {
     }
 }
 
-/// xtrace 服务配置
+/// xtrace server configuration
 pub struct ServerConfig {
     pub database_url: String,
     pub api_bearer_token: String,
@@ -181,8 +181,8 @@ struct Project {
 }
 
 async fn get_projects(State(state): State<AppState>) -> impl IntoResponse {
-    // Langfuse Python SDK v3.x 的 auth_check() 会调用 GET /api/public/projects
-    // 并检查返回的 projects.data 是否非空。
+    // Langfuse Python SDK v3.x auth_check() calls GET /api/public/projects
+    // and checks that projects.data is non-empty.
     let now = Utc::now().to_rfc3339();
     let project_id = state.default_project_id.as_ref().to_string();
     (
@@ -300,7 +300,7 @@ fn decode_hex(s: &str) -> Option<Vec<u8>> {
 }
 
 fn otel_trace_id_to_uuid(trace_id: &str) -> Option<Uuid> {
-    // OTLP traceId 是 16 bytes (32 hex)
+    // OTLP traceId is 16 bytes (32 hex)
     let raw = decode_hex(trace_id)?;
     if raw.len() != 16 {
         return None;
@@ -309,7 +309,7 @@ fn otel_trace_id_to_uuid(trace_id: &str) -> Option<Uuid> {
 }
 
 fn otel_span_id_to_uuid(span_id: &str) -> Option<Uuid> {
-    // OTLP spanId 是 8 bytes (16 hex)，这里左侧补 0 成 16 bytes 映射到 UUID
+    // OTLP spanId is 8 bytes (16 hex); pad left with zeros to 16 bytes for UUID mapping
     let raw = decode_hex(span_id)?;
     if raw.len() != 8 {
         return None;
@@ -673,9 +673,9 @@ fn map_otel_to_batches(
 }
 
 fn pb_to_otel_json(payload: PbExportTraceServiceRequest) -> OtelExportTraceServiceRequest {
-    // 为了避免引入完整 OTLP 类型转换，这里走“protobuf -> serde_json -> 我们的 JSON 结构”路径。
-    // prost Message 通常不直接支持 serde；因此我们只在 protobuf 情况下做最小字段提取。
-    // 注意：这里会丢弃大量字段，但对 xinference 主要需求（traceId/spanId/name/attrs/time）已足够。
+    // To avoid full OTLP type conversion, we use protobuf -> serde_json -> our JSON structure.
+    // prost Message does not directly support serde; we do minimal field extraction for protobuf only.
+    // Note: Many fields are dropped, but this suffices for xinference (traceId/spanId/name/attrs/time).
     let resource_spans = payload
         .resource_spans
         .into_iter()
@@ -864,7 +864,7 @@ async fn post_otel_traces(
     Ok((StatusCode::OK, Json(serde_json::json!({}))))
 }
 
-/// 启动 xtrace 服务（阻塞直到收到 shutdown 信号）
+/// Start xtrace server (blocks until shutdown signal)
 pub async fn run_server(config: ServerConfig) -> anyhow::Result<()> {
     let pool = PgPoolOptions::new()
         .max_connections(20)

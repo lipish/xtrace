@@ -11,7 +11,7 @@ on_err() {
   exit "$code"
 }
 trap on_err ERR
-: # 默认部署用户
+: # Default deploy user
 DEPLOY_USER="${DEPLOY_USER:-ubuntu}"
 : "${DEPLOY_SSH_KEY:?}"
 DEPLOY_HOST="${DEPLOY_HOST:-52.83.216.97}"
