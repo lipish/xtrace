@@ -1,48 +1,48 @@
 # xtrace
 
-xtrace 是一个用于 AI/LLM 可观测性的服务端组件，用于采集、存储与查询 traces/observations/metrics，帮助你在生产环境定位延迟、成本、质量与失败模式。
+xtrace is a server-side component for AI/LLM observability that collects, stores, and queries traces/observations/metrics to help you diagnose latency, cost, quality, and failure patterns in production.
 
-这个 crate 当前以 **binary（可执行服务）** 的形式发布（只有 `src/main.rs`），因此 **不提供可作为依赖导入的 Rust SDK API**。你可以把它当作一个 HTTP 服务来部署与调用。
+This crate is currently published as a **binary (executable service)** (only `src/main.rs`), so it **does not provide a Rust SDK API that can be imported as a dependency**. You can deploy and call it as an HTTP service.
 
-## 运行
+## Running
 
-依赖：PostgreSQL。
+Dependencies: PostgreSQL.
 
-环境变量：
-`DATABASE_URL`（必填）
-`API_BEARER_TOKEN`（必填，用于保护接口）
-`BIND_ADDR`（可选，默认 `127.0.0.1:8742`）
-`DEFAULT_PROJECT_ID`（可选，默认 `default`）
-`XTRACE_PUBLIC_KEY`（可选，用于兼容 Langfuse public API BasicAuth）
-`XTRACE_SECRET_KEY`（可选，用于兼容 Langfuse public API BasicAuth）
-`RATE_LIMIT_QPS`（可选，默认 `20`，per-token 查询限流 QPS）
-`RATE_LIMIT_BURST`（可选，默认 `40`，per-token 查询限流 burst 上限）
+Environment variables:
+`DATABASE_URL` (required)
+`API_BEARER_TOKEN` (required, protects the API)
+`BIND_ADDR` (optional, default `127.0.0.1:8742`)
+`DEFAULT_PROJECT_ID` (optional, default `default`)
+`XTRACE_PUBLIC_KEY` (optional, for Langfuse public API BasicAuth compatibility)
+`XTRACE_SECRET_KEY` (optional, for Langfuse public API BasicAuth compatibility)
+`RATE_LIMIT_QPS` (optional, default `20`, per-token query rate limit QPS)
+`RATE_LIMIT_BURST` (optional, default `40`, per-token query rate limit burst cap)
 
-兼容：
-也支持旧命名 `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY`。
+Compatibility:
+Also supports legacy names `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY`.
 
-启动：
+Start:
 ```bash
 DATABASE_URL=postgresql://xinference@localhost:5432/xtrace \
 API_BEARER_TOKEN=... \
 cargo run --release
 ```
 
-健康检查：
+Health check:
 ```bash
 curl http://127.0.0.1:8742/healthz
 ```
 
-## HTTP API（核心路由）
+## HTTP API (Core Routes)
 
-除 `/healthz` 外，其它接口需要携带 Bearer token：
+Except `/healthz`, all other endpoints require a Bearer token:
 `Authorization: Bearer $API_BEARER_TOKEN`
 
 `POST /v1/l/batch`
-用于批量写入（ingest）事件。
+Batch ingest events.
 
-请求体结构（简化）：
-`trace`（可选）+ `observations`（数组）
+Request body structure (simplified):
+`trace` (optional) + `observations` (array)
 
 ```json
 {
@@ -70,25 +70,25 @@ curl http://127.0.0.1:8742/healthz
 ```
 
 `GET /api/public/traces`
-用于分页查询 traces。
+Paginated trace query.
 
 `GET /api/public/traces/:traceId`
-用于查询某条 trace 的详情。
+Fetch a single trace's details.
 
 `GET /api/public/metrics/daily`
-用于查询按天聚合的指标。
+Query daily aggregated metrics.
 
-## Nebula 集成（Metrics）
+## Nebula Integration (Metrics)
 
-为支持 Nebula 上报 GPU/节点等指标（time-series metrics），xtrace 额外提供一组 metrics 写入与查询接口。
+To support Nebula reporting GPU/node metrics (time-series metrics), xtrace provides additional metrics write and query endpoints.
 
-说明：当前实现按“单租户/单 project”方式工作，所有写入的 metrics 会落到 `DEFAULT_PROJECT_ID`，且 `environment` 固定为 `default`。
+Note: The current implementation works in single-tenant/single-project mode; all written metrics go to `DEFAULT_PROJECT_ID` and `environment` is fixed to `default`.
 
-### 写入
+### Write
 
 `POST /v1/metrics/batch`
 
-请求体：
+Request body:
 
 ```json
 {
@@ -103,7 +103,7 @@ curl http://127.0.0.1:8742/healthz
 }
 ```
 
-示例：
+Example:
 
 ```bash
 NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
@@ -113,11 +113,11 @@ curl -H "Authorization: Bearer $API_BEARER_TOKEN" \
   "http://127.0.0.1:8742/v1/metrics/batch"
 ```
 
-### 查询
+### Query
 
 `GET /api/public/metrics/names`
 
-返回当前 project 下所有指标名：
+Returns all metric names under the current project:
 
 ```bash
 curl -H "Authorization: Bearer $API_BEARER_TOKEN" \
@@ -126,30 +126,30 @@ curl -H "Authorization: Bearer $API_BEARER_TOKEN" \
 
 `GET /api/public/metrics/query`
 
-参数：
+Parameters:
 
-- name（必填）
-- from/to（可选，ISO8601；默认最近 1 小时）
-- labels（可选，JSON 字符串；后端用 `labels @> ...` 过滤）
-- step（可选：1m/5m/1h/1d；默认 1m）
-- agg（可选：avg/max/min/sum/last；默认 avg）
+- name (required)
+- from/to (optional, ISO8601; default last 1 hour)
+- labels (optional, JSON string; backend filters with `labels @> ...`)
+- step (optional: 1m/5m/1h/1d; default 1m)
+- agg (optional: avg/max/min/sum/last; default avg)
 
-示例：
+Example:
 
 ```bash
 curl -H "Authorization: Bearer $API_BEARER_TOKEN" \
   "http://127.0.0.1:8742/api/public/metrics/query?name=gpu_utilization&step=1m&agg=last&labels=%7B%22node_id%22%3A%22node-1%22%2C%22gpu_index%22%3A%220%22%7D"
 ```
 
-示例：
+Example:
 ```bash
 curl -H "Authorization: Bearer $API_BEARER_TOKEN" \
   "http://127.0.0.1:8742/api/public/traces?page=1&limit=50"
 ```
 
-## Rust SDK（xtrace-client）
+## Rust SDK (xtrace-client)
 
-仓库内已提供 `xtrace-client` crate（HTTP SDK，基于 `reqwest`）。
+The repository includes an `xtrace-client` crate (HTTP SDK, based on `reqwest`).
 
 ```toml
 [dependencies]
@@ -157,7 +157,7 @@ xtrace-client = "0.0.1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
-示例：
+Example:
 ```rust
 use xtrace_client::{Client, TraceListQuery};
 
@@ -185,4 +185,4 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
-当前 `xtrace` crate 的定位是服务端；SDK 单独拆分可以避免把服务端依赖（axum/sqlx）带进业务侧。
+The `xtrace` crate is positioned as a server-side component; splitting the SDK separately avoids pulling server-side dependencies (axum/sqlx) into client applications.

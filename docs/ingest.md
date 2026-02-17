@@ -1,81 +1,81 @@
-# XTrace 写入（Ingest）与 Python SDK 设计（性能优先）
+# XTrace Ingest and Python SDK Design (Performance-First)
 
-本文档定义 XTrace 的写入链路（internal ingest HTTP API）与 Python SDK 的行为约定，目标是在不明显影响在线请求延迟的前提下，记录 OpenAI 兼容接口（`messages -> completion`）的调用过程。
+This document defines XTrace's ingest pipeline (internal ingest HTTP API) and Python SDK behavior, with the goal of recording OpenAI-compatible (`messages -> completion`) calls without materially affecting online request latency.
 
-> 说明
-> - `docs/api.md` 中的 `/api/public/*` 仅用于查询与聚合。
-> - 写入接口为 internal，供 SDK/网关/服务端埋点调用。
+> Note
+> - `/api/public/*` in `docs/api.md` is for query and aggregation only.
+> - Ingest endpoints are internal, for SDK/gateway/server instrumentation.
 
-## 设计目标
+## Design Goals
 
-- 最小侵入：业务代码尽量少改（类似 Langfuse 的 drop-in wrapper 思路）。
-- 异步优先：写入上报默认异步，不阻塞主请求。
-- 可控丢弃：在极端情况下允许丢弃写入事件，以保护业务延迟与稳定性。
-- 幂等：上报重试不产生重复数据。
-- 批量：网络与数据库写入尽量批量化。
+- Minimal intrusion: Few changes to business code (Langfuse-style drop-in wrapper).
+- Async-first: Ingest is async by default; does not block the main request.
+- Controlled discard: Under extreme load, allow dropping ingest events to protect latency and stability.
+- Idempotent: Retries do not produce duplicate data.
+- Batched: Network and DB writes are batched where possible.
 
-## 术语与数据模型
+## Terminology and Data Model
 
-- Trace：一次业务级调用/请求的容器。
-- Observation：Trace 内的事件/跨度。
-  - Generation：一次模型调用（对应 chat completion）。
+- Trace: Container for one business-level call/request.
+- Observation: Event/span within a trace.
+  - Generation: One model call (chat completion).
 
-## Internal Ingest HTTP API（建议）
+## Internal Ingest HTTP API (Suggested)
 
-### 认证
+### Authentication
 
-统一使用 Bearer Token：
+Use Bearer token:
 
 - `Authorization: Bearer <token>`
 
-token 到 `projectId` 的映射方式（MVP）：
+Token-to-`projectId` mapping (MVP):
 
-- 服务端配置静态 `projectId`（所有写入落同一 project）
-- 或者 token 映射到 project（后续扩展）
+- Server configures static `projectId` (all writes go to one project)
+- Or token maps to project (future extension)
 
-### 1) 批量写入（推荐）
+### 1) Batch Write (Recommended)
 
 `POST /v1/l/batch`
 
-请求体（概念结构）：
+Request body (conceptual):
 
-- `trace`：Trace 对象（可选）
-- `observations`：Observation 数组（可选）
+- `trace`: Trace object (optional)
+- `observations`: Observation array (optional)
 
-服务端语义：
+Server semantics:
 
-- 支持只上报 observations（trace 不存在则延迟关联或创建占位 trace）
-- 支持只上报 trace
-- 对每条记录执行 upsert
+- Supports observations-only (create placeholder trace if missing)
+- Supports trace-only
+- Upsert each record
 
-返回建议：
+Suggested responses:
 
-- 200：全部成功
-- 207：部分成功（返回失败项 id 与原因，SDK 可选择性重试）
-- 400：请求体校验失败
-- 401/403：鉴权失败
-- 429：服务端背压（SDK 应退避）
+- 200: All success
+- 207: Partial success (return failed ids and reasons; SDK may retry selectively)
+- 400: Request body validation failed
+- 401/403: Auth failed
+- 429: Server backpressure (SDK should back off)
 
-### 2) 单条写入（可选，便于调试）
+### 2) Single-Record Write (Optional, for debugging)
 
 - `POST /v1/l/traces`
 - `POST /v1/l/observations`
 
-生产默认由 SDK 合并为 batch 上报。
+Production SDK should merge into batch.
 
-### 幂等与 upsert key
+### Idempotency and Upsert Key
 
-- trace：以 `id` 作为主键 upsert
-- observation：以 `id` 作为主键 upsert
+- trace: Upsert by `id`
+- observation: Upsert by `id`
 
-SDK 生成规则建议：
+SDK generation rules:
 
-- `trace_id`：每次 chat 请求生成 UUID
-- `observation_id`：每次模型调用生成 UUID
+- `trace_id`: UUID per chat request
+- `observation_id`: UUID per model call
 
-### 字段约定（对齐 `docs/api.md` 返回结构）
+### Field Conventions (aligned with `docs/api.md` response structure)
 
-Trace（MVP）：
+Trace (MVP):
 
 - `id` (uuid)
 - `timestamp` (ISO8601)
@@ -84,97 +84,95 @@ Trace（MVP）：
 - `sessionId` (string|null)
 - `tags` (string[])
 - `metadata` (object|null)
-- `input` / `output`（可选，允许为空；更常见是放在 generation observation）
+- `input` / `output` (optional, may be empty; often in generation observation)
 
-Generation Observation（MVP）：
+Generation Observation (MVP):
 
 - `id` (uuid)
 - `traceId` (uuid)
-- `type`: 固定 `GENERATION`
-- `name`: 如 `chat`
+- `type`: fixed `GENERATION`
+- `name`: e.g. `chat`
 - `startTime` / `endTime` / `completionStartTime`
 - `model`
-- `input`: messages 数组（role/content）
-- `output`: completion 文本（或结构化）
+- `input`: messages array (role/content)
+- `output`: completion text (or structured)
 - `usage`: { input, output, total, unit }
-- `latency`（秒或毫秒需统一，建议毫秒；若沿用 `docs/api.md` 示例可继续用秒）
+- `latency` (seconds or milliseconds; recommend ms; `docs/api.md` examples use seconds)
 - `timeToFirstToken`
-- `metadata`（可选）
+- `metadata` (optional)
 
-## Python SDK（建议能力）
+## Python SDK (Suggested Capabilities)
 
-### 初始化
+### Initialization
 
-- 支持环境变量：
-  - `XTRACE_BASE_URL`
-  - `XTRACE_API_KEY`（Bearer token）
-  - `XTRACE_PROJECT_ID`（可选，若服务端无法从 token 推导）
+Environment variables:
 
-### 异步上报机制（核心）
+- `XTRACE_BASE_URL`
+- `XTRACE_API_KEY` (Bearer token)
+- `XTRACE_PROJECT_ID` (optional if server cannot derive from token)
 
-SDK 内部维护：
+### Async Reporting (Core)
 
-- 内存队列（bounded queue）
-- 后台 worker 线程/协程
-- 批量聚合与定时 flush
+SDK maintains:
 
-建议默认参数（可配置）：
+- In-memory bounded queue
+- Background worker thread/coroutine
+- Batch aggregation and periodic flush
+
+Suggested defaults (configurable):
 
 - `queue_max_size`: 10_000
 - `batch_max_size`: 100
 - `flush_interval_ms`: 500
 - `request_timeout_ms`: 2_000
-- `max_retries`: 3（指数退避）
+- `max_retries`: 3 (exponential backoff)
 
-队列满时策略（默认）：
+Queue-full policy (default):
 
-- 丢弃新事件，并在本地计数（暴露 metrics），避免阻塞业务
-- 可选策略：阻塞等待（仅用于离线/批处理场景）
+- Drop new events and count locally (expose metrics); avoid blocking business
+- Optional: Block and wait (offline/batch only)
 
-退出与 flush：
+Shutdown and flush:
 
-- 提供 `flush()` 显式等待队列清空
-- 提供 `shutdown()`（注册 `atexit` 尝试 flush，设置最大等待时间）
+- `flush()`: Explicit wait for queue to drain
+- `shutdown()`: Register `atexit` to attempt flush with max wait time
 
-### OpenAI drop-in wrapper（建议）
+### OpenAI Drop-in Wrapper (Suggested)
 
-目标：业务侧尽量只替换 import 或 client 初始化。
+Goal: Business code only changes import or client initialization.
 
-记录内容：
+Recorded content:
 
-- 每次 `chat.completions.create(...)` 生成一个 trace + 一个 generation observation
-- stream 场景：
-  - 收到首 token 记录 `completionStartTime` / `timeToFirstToken`
-  - 结束时写最终 `output` 与 `usage`
+- Each `chat.completions.create(...)` produces one trace + one generation observation
+- Stream: Record `completionStartTime` / `timeToFirstToken` on first token; write final `output` and `usage` on completion
 
-### 失败处理与背压
+### Failure Handling and Backpressure
 
-- 429/5xx：指数退避重试，超过重试次数后丢弃并计数
-- 4xx（非 429）：认为是不可重试错误，丢弃并记录错误原因
+- 429/5xx: Exponential backoff retry; drop and count after max retries
+- 4xx (except 429): Non-retryable; drop and log reason
 
-## 服务端性能策略（Rust）
+## Server Performance Strategy (Rust)
 
-### 写入路径
+### Write Path
 
-- HTTP handler 只做轻量校验与鉴权
-- 将 batch payload 进入内部 channel
-- 后台写入任务：
-  - 合并多个请求形成更大批量（例如每 50ms 或凑够 N 条）
-  - 使用单次事务 + 批量 upsert
+- HTTP handler: Light validation and auth only
+- Push batch payload into internal channel
+- Background writer:
+  - Merge requests into larger batches (e.g. every 50ms or N records)
+  - Single transaction + batch upsert
 
-### 数据库
+### Database
 
-- 对 `traces(id)`、`observations(id)` 建主键
-- 对 `observations(trace_id, start_time)` 建索引（详情页查询）
-- 对 traces 的查询条件字段建索引：`project_id + timestamp`、`user_id`、`session_id`、`tags(GIN)`
+- Primary keys on `traces(id)`, `observations(id)`
+- Index on `observations(trace_id, start_time)` (detail queries)
+- Indexes on trace query fields: `project_id + timestamp`, `user_id`, `session_id`, `tags(GIN)`
 
-### 背压
+### Backpressure
 
-- 服务端内部队列满：直接返回 429
-- 限流可先按进程级别做（后续再按 token/project 维度）
+- Internal queue full: Return 429
+- Rate limit can start at process level (later per token/project)
 
-## 与 `docs/api.md` 的关系
+## Relationship to `docs/api.md`
 
-- public 查询接口保持不变：`/api/public/*`
-- ingest 接口只用于把 trace/observation 写入库，以支撑 public 查询
-
+- Public query endpoints unchanged: `/api/public/*`
+- Ingest endpoints only write trace/observation to DB to support public queries

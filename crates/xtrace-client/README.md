@@ -1,17 +1,17 @@
 # xtrace-client
 
-这是 xtrace 服务端（HTTP API）的 Rust SDK。
+Rust SDK for the xtrace server (HTTP API).
 
-## 安装
+## Installation
 
-已发布到 crates.io：
+Published on crates.io:
 
 ```toml
 [dependencies]
 xtrace-client = "0.0.1"
 ```
 
-## 使用
+## Usage
 
 ```rust
 use xtrace_client::{Client, TraceListQuery};
@@ -29,9 +29,12 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
-目前封装的接口：
+Available methods:
 - healthz
-- ingest_batch（POST /v1/l/batch）
-- list_traces（GET /api/public/traces）
-- get_trace（GET /api/public/traces/:traceId）
-- metrics_daily（GET /api/public/metrics/daily）
+- ingest_batch (POST /v1/l/batch)
+- list_traces (GET /api/public/traces)
+- get_trace (GET /api/public/traces/:traceId)
+- metrics_daily (GET /api/public/metrics/daily)
+- push_metrics (POST /v1/metrics/batch)
+- query_metrics (GET /api/public/metrics/query)
+- list_metric_names (GET /api/public/metrics/names)
