@@ -1,3 +1,8 @@
+#[cfg(feature = "tracing")]
+pub mod layer;
+#[cfg(feature = "tracing")]
+pub use layer::XtraceLayer;
+
 use chrono::{DateTime, Utc};
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};

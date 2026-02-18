@@ -1,6 +1,6 @@
 [package]
 name = "xtrace-client"
-version = "0.0.11"
+version = "0.0.12"
 edition = "2021"
 
 description = "Rust client (SDK) for the xtrace HTTP service."
@@ -13,6 +13,10 @@ readme = "README.md"
 keywords = ["observability", "tracing", "llm", "ai", "telemetry"]
 categories = ["api-bindings", "web-programming::http-client"]
 
+[features]
+default = []
+tracing = ["dep:tracing", "dep:tracing-subscriber", "dep:tokio"]
+
 [dependencies]
 reqwest = { version = "0.12", default-features = true, features = ["json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
@@ -21,3 +25,8 @@ thiserror = "1"
 url = "2"
 uuid = { version = "1", features = ["serde", "v4"] }
 chrono = { version = "0.4", features = ["serde"] }
+
+# Optional: tracing::Layer for auto-metric collection
+tracing = { version = "0.1", optional = true }
+tracing-subscriber = { version = "0.3", features = ["registry"], optional = true }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"], optional = true }
