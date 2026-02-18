@@ -1,48 +1,46 @@
 # xtrace
 
-xtrace is a server-side component for AI/LLM observability that collects, stores, and queries traces/observations/metrics to help you diagnose latency, cost, quality, and failure patterns in production.
-
-This crate is currently published as a **binary (executable service)** (only `src/main.rs`), so it **does not provide a Rust SDK API that can be imported as a dependency**. You can deploy and call it as an HTTP service.
+xtrace is a lightweight, self-hosted observability backend for AI/LLM applications. It collects traces, observations, and time-series metrics to help you diagnose latency, cost, quality, and failure patterns in production.
 
 ## Running
 
 Dependencies: PostgreSQL.
 
 Environment variables:
-`DATABASE_URL` (required)
-`API_BEARER_TOKEN` (required, protects the API)
-`BIND_ADDR` (optional, default `127.0.0.1:8742`)
-`DEFAULT_PROJECT_ID` (optional, default `default`)
-`XTRACE_PUBLIC_KEY` (optional, for Langfuse public API BasicAuth compatibility)
-`XTRACE_SECRET_KEY` (optional, for Langfuse public API BasicAuth compatibility)
-`RATE_LIMIT_QPS` (optional, default `20`, per-token query rate limit QPS)
-`RATE_LIMIT_BURST` (optional, default `40`, per-token query rate limit burst cap)
 
-Compatibility:
-Also supports legacy names `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY`.
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `DATABASE_URL` | ✓ | — | PostgreSQL connection string |
+| `API_BEARER_TOKEN` | ✓ | — | Protects all API endpoints |
+| `BIND_ADDR` | | `127.0.0.1:8742` | Listen address |
+| `DEFAULT_PROJECT_ID` | | `default` | Project id for ingested data |
+| `XTRACE_PUBLIC_KEY` | | — | Langfuse BasicAuth compatibility |
+| `XTRACE_SECRET_KEY` | | — | Langfuse BasicAuth compatibility |
+| `RATE_LIMIT_QPS` | | `20` | Per-token query rate limit |
+| `RATE_LIMIT_BURST` | | `40` | Per-token burst cap |
 
-Start:
+Also accepts legacy names `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY`.
+
 ```bash
-DATABASE_URL=postgresql://xinference@localhost:5432/xtrace \
-API_BEARER_TOKEN=... \
+DATABASE_URL=postgresql://user@localhost:5432/xtrace \
+API_BEARER_TOKEN=secret \
 cargo run --release
 ```
 
 Health check:
+
 ```bash
 curl http://127.0.0.1:8742/healthz
 ```
 
-## HTTP API (Core Routes)
+## HTTP API
 
-Except `/healthz`, all other endpoints require a Bearer token:
+All endpoints except `/healthz` require:
 `Authorization: Bearer $API_BEARER_TOKEN`
 
-`POST /v1/l/batch`
-Batch ingest events.
+### Traces
 
-Request body structure (simplified):
-`trace` (optional) + `observations` (array)
+`POST /v1/l/batch` — Batch ingest traces and observations.
 
 ```json
 {
@@ -69,120 +67,115 @@ Request body structure (simplified):
 }
 ```
 
-`GET /api/public/traces`
-Paginated trace query.
+`GET /api/public/traces` — Paginated trace list.
+`GET /api/public/traces/:traceId` — Single trace detail.
+`GET /api/public/metrics/daily` — Daily aggregated metrics.
 
-`GET /api/public/traces/:traceId`
-Fetch a single trace's details.
+### Metrics (Time-Series)
 
-`GET /api/public/metrics/daily`
-Query daily aggregated metrics.
-
-## Nebula Integration (Metrics)
-
-To support Nebula reporting GPU/node metrics (time-series metrics), xtrace provides additional metrics write and query endpoints.
-
-Note: The current implementation works in single-tenant/single-project mode; all written metrics go to `DEFAULT_PROJECT_ID` and `environment` is fixed to `default`.
-
-### Write
-
-`POST /v1/metrics/batch`
-
-Request body:
-
-```json
-{
-  "metrics": [
-    {
-      "name": "gpu_utilization",
-      "labels": {"node_id": "node-1", "gpu_index": "0"},
-      "value": 85.0,
-      "timestamp": "2026-02-12T12:18:00Z"
-    }
-  ]
-}
-```
-
-Example:
+`POST /v1/metrics/batch` — Write time-series metrics.
 
 ```bash
-NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 curl -H "Authorization: Bearer $API_BEARER_TOKEN" \
   -H "Content-Type: application/json" \
-  -d "{\"metrics\":[{\"name\":\"gpu_utilization\",\"labels\":{\"node_id\":\"node-1\",\"gpu_index\":\"0\"},\"value\":85.0,\"timestamp\":\"$NOW\"}]}" \
-  "http://127.0.0.1:8742/v1/metrics/batch"
+  -d '{"metrics":[{"name":"gpu_utilization","labels":{"node_id":"node-1","gpu_index":"0"},"value":85.0,"timestamp":"2026-02-14T12:00:00Z"}]}' \
+  http://127.0.0.1:8742/v1/metrics/batch
 ```
 
-### Query
+`GET /api/public/metrics/names` — List all metric names.
 
-`GET /api/public/metrics/names`
+`GET /api/public/metrics/query` — Query time-series with downsampling.
 
-Returns all metric names under the current project:
+| Parameter | Values | Default |
+|-----------|--------|---------|
+| `name` | metric name (required) | — |
+| `from` / `to` | ISO8601 timestamps | last 1 hour |
+| `labels` | JSON label filter | — |
+| `step` | `1m` `5m` `1h` `1d` | `1m` |
+| `agg` | `avg` `max` `min` `sum` `last` **`p50` `p90` `p99`** | `avg` |
+| `group_by` | label key to split series by | — |
+
+Example — p99 latency grouped by model:
 
 ```bash
 curl -H "Authorization: Bearer $API_BEARER_TOKEN" \
-  "http://127.0.0.1:8742/api/public/metrics/names"
-```
-
-`GET /api/public/metrics/query`
-
-Parameters:
-
-- name (required)
-- from/to (optional, ISO8601; default last 1 hour)
-- labels (optional, JSON string; backend filters with `labels @> ...`)
-- step (optional: 1m/5m/1h/1d; default 1m)
-- agg (optional: avg/max/min/sum/last; default avg)
-
-Example:
-
-```bash
-curl -H "Authorization: Bearer $API_BEARER_TOKEN" \
-  "http://127.0.0.1:8742/api/public/metrics/query?name=gpu_utilization&step=1m&agg=last&labels=%7B%22node_id%22%3A%22node-1%22%2C%22gpu_index%22%3A%220%22%7D"
-```
-
-Example:
-```bash
-curl -H "Authorization: Bearer $API_BEARER_TOKEN" \
-  "http://127.0.0.1:8742/api/public/traces?page=1&limit=50"
+  "http://127.0.0.1:8742/api/public/metrics/query?name=span_duration&step=5m&agg=p99&group_by=model"
 ```
 
 ## Rust SDK (xtrace-client)
 
-The repository includes an `xtrace-client` crate (HTTP SDK, based on `reqwest`).
-
 ```toml
 [dependencies]
-xtrace-client = "0.0.1"
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+xtrace-client = "0.0.12"
 ```
 
-Example:
 ```rust
-use xtrace_client::{Client, TraceListQuery};
+use xtrace_client::{Client, MetricPoint, MetricsQueryParams};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let client = Client::new("http://127.0.0.1:8742/", "YOUR_TOKEN")?;
     client.healthz().await?;
 
-    let traces = client.list_traces(&TraceListQuery::default()).await?;
-    println!("{}", traces.data.len());
+    // Push metrics
+    client.push_metrics(&[MetricPoint {
+        name: "gpu_utilization".to_string(),
+        labels: std::collections::HashMap::from([
+            ("node_id".to_string(), "node-1".to_string()),
+        ]),
+        value: 85.0,
+        timestamp: chrono::Utc::now(),
+    }]).await?;
 
-    let now = chrono::Utc::now();
-    client
-        .push_metrics(&[xtrace_client::MetricPoint {
-            name: "gpu_utilization".to_string(),
-            labels: std::collections::HashMap::from([
-                ("node_id".to_string(), "node-1".to_string()),
-                ("gpu_index".to_string(), "0".to_string()),
-            ]),
-            value: 85.0,
-            timestamp: now,
-        }])
-        .await?;
+    // Query with percentile aggregation
+    let result = client.query_metrics(&MetricsQueryParams {
+        name: "gpu_utilization".to_string(),
+        step: Some("5m".to_string()),
+        agg: Some("p99".to_string()),
+        group_by: Some("node_id".to_string()),
+        ..Default::default()
+    }).await?;
+
     Ok(())
 }
 ```
 
-The `xtrace` crate is positioned as a server-side component; splitting the SDK separately avoids pulling server-side dependencies (axum/sqlx) into client applications.
+### tracing Integration
+
+Enable the `tracing` feature to automatically push metrics from `tracing` events and span durations — no manual `push_metrics` calls needed:
+
+```toml
+xtrace-client = { version = "0.0.12", features = ["tracing"] }
+```
+
+```rust
+use xtrace_client::{Client, XtraceLayer};
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+
+let client = Client::new("http://127.0.0.1:8742/", "YOUR_TOKEN")?;
+
+tracing_subscriber::registry()
+    .with(XtraceLayer::new(client))
+    .with(tracing_subscriber::fmt::layer())
+    .init();
+
+// Any event with metric= and value= is auto-pushed:
+tracing::info!(metric = "zene_tokens", value = 512, model = "gpt-4o");
+
+// Span durations are auto-reported as span_duration with a span_name label:
+let _span = tracing::info_span!("execute_tool").entered();
+```
+
+## Frontend Dashboard
+
+A React dashboard (Vite + shadcn/ui) is included in the `frontend/` directory.
+
+```bash
+cd frontend
+VITE_XTRACE_BASE_URL=http://127.0.0.1:8742 \
+VITE_XTRACE_API_TOKEN=your_token \
+npm install && npm run dev
+```
+
+Features: trace list, trace detail viewer with observation tree, and a metrics dashboard.
