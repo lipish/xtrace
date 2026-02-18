@@ -6,8 +6,15 @@ The `xtrace-client` crate provides an async HTTP client for interacting with the
 
 ```toml
 [dependencies]
-xtrace-client = "0.0.11"
+xtrace-client = "0.0.12"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+```
+
+To enable automatic metric collection via the `tracing` ecosystem:
+
+```toml
+[dependencies]
+xtrace-client = { version = "0.0.12", features = ["tracing"] }
 ```
 
 ## Quick Start
@@ -144,6 +151,42 @@ for item in &daily.data {
     println!("{}: {} traces, cost={}", item.date, item.count_traces, item.total_cost);
 }
 ```
+
+## tracing Integration
+
+With the `tracing` feature enabled, `XtraceLayer` automatically pushes metrics from tracing events and span durations — no manual `push_metrics` calls needed.
+
+```rust
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use xtrace_client::{Client, XtraceLayer};
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let client = Client::new("http://127.0.0.1:8742/", "your-token")?;
+
+    tracing_subscriber::registry()
+        .with(XtraceLayer::new(client))
+        .with(tracing_subscriber::fmt::layer())
+        .init();
+
+    // Events with metric= and value= are pushed automatically.
+    // Supported label fields: session_id, task_id, model, model_name,
+    //   provider, agent_role, tool_name, status
+    tracing::info!(metric = "zene_tokens", value = 512, model = "gpt-4o");
+
+    // Span durations are auto-reported as `span_duration` with `span_name` label.
+    let _span = tracing::info_span!("execute_tool").entered();
+    // ... work happens here ...
+    drop(_span); // duration is recorded and pushed on drop
+
+    Ok(())
+}
+```
+
+Metrics are batched (≤50 per flush, or every 500 ms) and flushed from a background thread — the tracing hot path is never blocked.
+
+See the [tracing integration guide](/integrations/tracing) for more detail.
 
 ## API Reference
 
