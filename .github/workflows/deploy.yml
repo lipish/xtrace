@@ -1,13 +1,20 @@
-name: Deploy
+name: CI
 
 on:
   push:
     branches: ["main"]
+    paths-ignore:
+      - 'www/**'
+      - 'docs/**'
+      - '**.md'
+      - '.github/workflows/deploy-docs.yml'
     tags: ["v*", "release-*"]
+  pull_request:
+    branches: ["main"]
   workflow_dispatch:
 
 concurrency:
-  group: deploy-${{ github.ref }}
+  group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -18,37 +25,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy,rustfmt
-      - run: cargo fmt --all
+      - run: cargo fmt --all --check
       - run: cargo clippy --all-targets --all-features -- -D warnings
       - run: cargo test --all --quiet
-
-  build-artifact:
-    runs-on: ubuntu-latest
-    needs: build-test
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - run: rustup target add x86_64-unknown-linux-musl
-      - run: sudo apt-get update && sudo apt-get install -y musl-tools
-      - run: cargo build --release --target x86_64-unknown-linux-musl
-      - run: mkdir -p dist && cp target/x86_64-unknown-linux-musl/release/xtrace dist/xtrace && tar -C dist -czf xtrace.tar.gz xtrace
-      - uses: actions/upload-artifact@v4
-        with:
-          name: xtrace-linux-musl
-          path: xtrace.tar.gz
-
-  deploy:
-    runs-on: ubuntu-latest
-    needs: build-artifact
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: xtrace-linux-musl
-      - run: bash scripts/deploy.sh
-        env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
-          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
-          ARTIFACT_FILE: xtrace.tar.gz
