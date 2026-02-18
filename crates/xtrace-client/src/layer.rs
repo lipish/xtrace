@@ -1,14 +1,15 @@
-//! `tracing::Layer` for automatic metric collection.
+//! `tracing::Layer` for automatic metric collection and trace ID propagation.
 //!
 //! When the `tracing` feature is enabled, add `XtraceLayer` to your subscriber
-//! to automatically push metrics from tracing events and span durations to xtrace.
+//! to automatically push metrics from tracing events and span durations to xtrace,
+//! and propagate a unique Trace ID across the span tree.
 //!
 //! # Example
 //!
 //! ```ignore
 //! use tracing_subscriber::layer::SubscriberExt;
 //! use tracing_subscriber::util::SubscriberInitExt;
-//! use xtrace_client::{Client, XtraceLayer};
+//! use xtrace_client::{Client, XtraceLayer, current_trace_id};
 //!
 //! let client = Client::new("http://127.0.0.1:8742/", "token")?;
 //! let layer = XtraceLayer::new(client);
@@ -20,6 +21,11 @@
 //!
 //! // Events with metric= and value= are auto-pushed:
 //! tracing::info!(metric = "zene_tokens", value = 100, model = "gpt-4");
+//!
+//! // Trace ID is available anywhere inside a span:
+//! if let Some(tid) = current_trace_id() {
+//!     println!("trace_id = {}", tid);
+//! }
 //!
 //! // Span durations are auto-reported as span_duration metric:
 //! #[tracing::instrument(fields(session_id = %session.id))]
@@ -33,12 +39,14 @@ use std::collections::HashMap;
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::OnceLock;
 use std::time::Instant;
 use tracing::field::Field;
 use tracing::field::Visit;
 use tracing_subscriber::layer::Context;
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::Layer;
+use uuid::Uuid;
 
 use crate::Client;
 use crate::MetricPoint;
@@ -46,13 +54,9 @@ use crate::MetricPoint;
 /// Default metric name for span duration.
 pub const SPAN_DURATION_METRIC: &str = "span_duration";
 
-/// Default batch size before flush.
 const BATCH_SIZE: usize = 50;
-
-/// Default flush interval in milliseconds.
 const FLUSH_INTERVAL_MS: u64 = 500;
 
-/// Fields to promote as labels when present (session_id, task_id, model, etc.).
 const LABEL_FIELDS: &[&str] = &[
     "session_id",
     "task_id",
@@ -64,11 +68,47 @@ const LABEL_FIELDS: &[&str] = &[
     "status",
 ];
 
-/// A tracing Layer that pushes metrics to xtrace.
+// ---------------------------------------------------------------------------
+// Global trace-id store
+// ---------------------------------------------------------------------------
+
+fn trace_id_store() -> &'static Mutex<HashMap<u64, Uuid>> {
+    static STORE: OnceLock<Mutex<HashMap<u64, Uuid>>> = OnceLock::new();
+    STORE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Returns the trace ID associated with the **current** tracing span, if any.
+///
+/// When `XtraceLayer` is active, every root span gets a new `Uuid` trace ID
+/// and all child spans inherit it. Use this to propagate the trace ID into
+/// outgoing HTTP headers, logs, or any other context.
+///
+/// Returns `None` if no span is currently entered or `XtraceLayer` is not installed.
+///
+/// ```ignore
+/// if let Some(tid) = xtrace_client::current_trace_id() {
+///     headers.insert("X-Trace-Id", tid.to_string().parse().unwrap());
+/// }
+/// ```
+pub fn current_trace_id() -> Option<Uuid> {
+    let span = tracing::Span::current();
+    let id = span.id()?;
+    let key = id.into_u64();
+    trace_id_store().lock().ok()?.get(&key).copied()
+}
+
+// ---------------------------------------------------------------------------
+// XtraceLayer
+// ---------------------------------------------------------------------------
+
+/// A tracing Layer that pushes metrics to xtrace and propagates trace IDs.
 ///
 /// - **Events** with `metric` and `value` fields are pushed as metrics.
 ///   Other string/numeric fields (session_id, task_id, model, etc.) become labels.
 /// - **Span durations** are reported as `span_duration` metric with `span_name` label.
+/// - **Trace IDs** are auto-generated for root spans and inherited by children.
+///   The `trace_id` is injected into every metric's labels automatically.
+///   If a span carries an explicit `trace_id` field, that value is used instead.
 #[derive(Clone)]
 pub struct XtraceLayer {
     inner: Arc<XtraceLayerInner>,
@@ -76,7 +116,6 @@ pub struct XtraceLayer {
 
 struct XtraceLayerInner {
     tx: mpsc::SyncSender<MetricPoint>,
-    /// Tracks span creation time by span id (u64) for duration measurement on close.
     span_records: Mutex<Vec<SpanRecord>>,
 }
 
@@ -151,26 +190,55 @@ fn flush_batch(
     });
 }
 
+// ---------------------------------------------------------------------------
+// Layer implementation
+// ---------------------------------------------------------------------------
+
 impl<S> Layer<S> for XtraceLayer
 where
     S: tracing::Subscriber + for<'a> LookupSpan<'a>,
 {
-    fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
-        let mut visitor = MetricEventVisitor::default();
-        event.record(&mut visitor);
-        if let Some(point) = visitor.into_metric_point() {
-            self.try_send(point);
-        }
-    }
-
     fn on_new_span(
         &self,
         attrs: &tracing::span::Attributes<'_>,
         id: &tracing::Id,
-        _ctx: Context<'_, S>,
+        ctx: Context<'_, S>,
     ) {
         let name = attrs.metadata().name().to_string();
         let key = id.clone().into_u64();
+
+        // Check for an explicit trace_id field on this span.
+        let mut tid_visitor = TraceIdVisitor::default();
+        attrs.record(&mut tid_visitor);
+
+        let trace_id = if let Some(explicit) = tid_visitor.trace_id {
+            explicit
+        } else {
+            // Inherit from parent, or generate a new one for root spans.
+            let parent_id = if attrs.is_root() {
+                None
+            } else if let Some(parent) = attrs.parent() {
+                Some(parent.clone())
+            } else {
+                ctx.current_span().id().cloned()
+            };
+
+            let parent_tid = parent_id.and_then(|pid| {
+                trace_id_store()
+                    .lock()
+                    .ok()?
+                    .get(&pid.into_u64())
+                    .copied()
+            });
+
+            parent_tid.unwrap_or_else(Uuid::new_v4)
+        };
+
+        // Store trace_id mapping (release lock before acquiring span_records).
+        if let Ok(mut store) = trace_id_store().lock() {
+            store.insert(key, trace_id);
+        }
+
         let mut guard = self.inner.span_records.lock().unwrap();
         guard.push(SpanRecord {
             span_id: key,
@@ -179,8 +247,31 @@ where
         });
     }
 
+    fn on_event(&self, event: &tracing::Event<'_>, ctx: Context<'_, S>) {
+        let mut visitor = MetricEventVisitor::default();
+        event.record(&mut visitor);
+        if let Some(mut point) = visitor.into_metric_point() {
+            // Auto-inject trace_id from current span context.
+            if let Some(tid) = ctx
+                .current_span()
+                .id()
+                .and_then(|sid| trace_id_store().lock().ok()?.get(&sid.into_u64()).copied())
+            {
+                point
+                    .labels
+                    .entry("trace_id".to_string())
+                    .or_insert_with(|| tid.to_string());
+            }
+            self.try_send(point);
+        }
+    }
+
     fn on_close(&self, id: tracing::Id, _ctx: Context<'_, S>) {
         let key = id.into_u64();
+
+        // Remove and read trace_id before cleanup.
+        let trace_id = trace_id_store().lock().ok().and_then(|mut s| s.remove(&key));
+
         let (duration_secs, span_name) = {
             let mut guard = self.inner.span_records.lock().unwrap();
             let pos = guard.iter().position(|r| r.span_id == key);
@@ -191,8 +282,13 @@ where
                 return;
             }
         };
+
         let mut labels = HashMap::new();
         labels.insert("span_name".to_string(), span_name);
+        if let Some(tid) = trace_id {
+            labels.insert("trace_id".to_string(), tid.to_string());
+        }
+
         let point = MetricPoint {
             name: SPAN_DURATION_METRIC.to_string(),
             labels,
@@ -200,6 +296,28 @@ where
             timestamp: Utc::now(),
         };
         self.try_send(point);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Visitors
+// ---------------------------------------------------------------------------
+
+/// Extracts an explicit `trace_id` field from span attributes.
+#[derive(Default)]
+struct TraceIdVisitor {
+    trace_id: Option<Uuid>,
+}
+
+impl Visit for TraceIdVisitor {
+    fn record_debug(&mut self, _field: &Field, _value: &dyn std::fmt::Debug) {}
+
+    fn record_str(&mut self, field: &Field, value: &str) {
+        if field.name() == "trace_id" || field.name() == "xtrace.trace_id" {
+            if let Ok(id) = Uuid::parse_str(value) {
+                self.trace_id = Some(id);
+            }
+        }
     }
 }
 
@@ -235,7 +353,8 @@ impl Visit for MetricEventVisitor {
         if field.name() == "metric" {
             self.metric = Some(value.to_string());
         } else if LABEL_FIELDS.contains(&field.name()) {
-            self.labels.insert(field.name().to_string(), value.to_string());
+            self.labels
+                .insert(field.name().to_string(), value.to_string());
         }
     }
 
@@ -266,4 +385,3 @@ impl Visit for MetricEventVisitor {
         }
     }
 }
-

@@ -1,6 +1,8 @@
 #[cfg(feature = "tracing")]
 pub mod layer;
 #[cfg(feature = "tracing")]
+pub use layer::current_trace_id;
+#[cfg(feature = "tracing")]
 pub use layer::XtraceLayer;
 
 use chrono::{DateTime, Utc};
