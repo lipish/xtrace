@@ -935,15 +935,14 @@ pub async fn run_server(config: ServerConfig) -> anyhow::Result<()> {
     let addr: SocketAddr = config.bind_addr.parse()?;
     tracing::info!(
         "listening on {} (rate_limit: {} qps, burst {})",
-        addr, qps, burst
+        addr,
+        qps,
+        burst
     );
 
     let app = Router::new()
         .route("/healthz", get(healthz))
-        .route(
-            "/api/internal/rate_limit_stats",
-            get(get_rate_limit_stats),
-        )
+        .route("/api/internal/rate_limit_stats", get(get_rate_limit_stats))
         .merge(protected_routes)
         .with_state(state)
         .layer(TraceLayer::new_for_http());
@@ -990,7 +989,10 @@ async fn healthz() -> impl IntoResponse {
 /// No auth required (internal / ops endpoint, like `/healthz`).
 async fn get_rate_limit_stats(State(state): State<AppState>) -> impl IntoResponse {
     let total_allowed = state.rate_limit_stats.total_allowed.load(Ordering::Relaxed);
-    let total_rejected = state.rate_limit_stats.total_rejected.load(Ordering::Relaxed);
+    let total_rejected = state
+        .rate_limit_stats
+        .total_rejected
+        .load(Ordering::Relaxed);
 
     // Collect per-token stats and sort descending by count.
     let mut per_token: Vec<(String, u64)> = state
@@ -1005,9 +1007,7 @@ async fn get_rate_limit_stats(State(state): State<AppState>) -> impl IntoRespons
     let top = per_token
         .into_iter()
         .take(20)
-        .map(|(token, count)| {
-            serde_json::json!({ "token": token, "count": count })
-        })
+        .map(|(token, count)| serde_json::json!({ "token": token, "count": count }))
         .collect::<Vec<_>>();
 
     let body = serde_json::json!({
@@ -1132,9 +1132,8 @@ async fn rate_limit(
         Err(not_until) => {
             let masked = mask_client_key(&key);
             state.rate_limit_stats.record_rejected(&masked);
-            let wait = not_until.wait_time_from(governor::clock::Clock::now(
-                state.query_limiter.clock(),
-            ));
+            let wait =
+                not_until.wait_time_from(governor::clock::Clock::now(state.query_limiter.clock()));
             let retry_after_secs = wait.as_secs().max(1);
             let reset_at = Utc::now() + chrono::Duration::seconds(retry_after_secs as i64);
 
