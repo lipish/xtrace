@@ -1,0 +1,152 @@
+/* ── Rust Oxidized Theme ── */
+
+:root {
+  /* Brand: Rust orange */
+  --vp-c-brand-1: #e57324;
+  --vp-c-brand-2: #f08c42;
+  --vp-c-brand-3: #c45e1a;
+  --vp-c-brand-soft: rgba(229, 115, 36, 0.14);
+
+  /* Typography */
+  --vp-font-family-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Code',
+    'Source Code Pro', Menlo, Consolas, 'DejaVu Sans Mono', monospace;
+}
+
+/* ── Dark mode (default) ── */
+.dark {
+  --vp-c-bg: #0e0e10;
+  --vp-c-bg-soft: #161618;
+  --vp-c-bg-mute: #1e1e20;
+  --vp-c-bg-alt: #131315;
+
+  --vp-c-text-1: #e0ddd5;
+  --vp-c-text-2: #a8a5a0;
+  --vp-c-text-3: #6b6965;
+
+  --vp-c-divider: #2a2a2c;
+  --vp-c-gutter: #1a1a1c;
+
+  --vp-code-bg: #18181b;
+
+  --vp-c-brand-1: #e57324;
+  --vp-c-brand-2: #f08c42;
+  --vp-c-brand-3: #c45e1a;
+  --vp-c-brand-soft: rgba(229, 115, 36, 0.12);
+
+  --vp-button-brand-bg: #e57324;
+  --vp-button-brand-hover-bg: #f08c42;
+  --vp-button-brand-active-bg: #c45e1a;
+  --vp-button-brand-text: #fff;
+
+  --vp-home-hero-name-color: transparent;
+  --vp-home-hero-name-background: linear-gradient(135deg, #e57324, #f9a825);
+  --vp-home-hero-image-background-image: radial-gradient(
+    ellipse at center,
+    rgba(229, 115, 36, 0.18) 0%,
+    transparent 70%
+  );
+}
+
+/* ── Light mode (engineering-blueprint feel) ── */
+:root:not(.dark) {
+  --vp-c-bg: #faf8f5;
+  --vp-c-bg-soft: #f0ede8;
+  --vp-c-bg-mute: #e8e5e0;
+  --vp-c-bg-alt: #f5f2ed;
+
+  --vp-c-text-1: #1a1a1a;
+  --vp-c-text-2: #4a4a4a;
+  --vp-c-text-3: #7a7a7a;
+
+  --vp-c-divider: #d8d5d0;
+
+  --vp-code-bg: #edeae5;
+
+  --vp-button-brand-bg: #e57324;
+  --vp-button-brand-hover-bg: #c45e1a;
+  --vp-button-brand-active-bg: #a34d14;
+  --vp-button-brand-text: #fff;
+
+  --vp-home-hero-name-color: transparent;
+  --vp-home-hero-name-background: linear-gradient(135deg, #c45e1a, #e57324);
+}
+
+/* ── Global typography ── */
+.vp-doc h1,
+.vp-doc h2,
+.vp-doc h3,
+.vp-doc h4 {
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.vp-doc code {
+  font-family: var(--vp-font-family-mono);
+  font-size: 0.875em;
+}
+
+/* ── Sharper edges (Rust / industrial feel) ── */
+.VPButton {
+  border-radius: 4px !important;
+}
+
+.vp-doc .custom-block {
+  border-radius: 4px;
+}
+
+.VPNavBar .content {
+  backdrop-filter: blur(12px);
+}
+
+/* ── Code blocks ── */
+.dark .vp-doc div[class*='language-'] {
+  background-color: #141416;
+  border: 1px solid #2a2a2c;
+  border-radius: 4px;
+}
+
+:root:not(.dark) .vp-doc div[class*='language-'] {
+  background-color: #f0ede8;
+  border: 1px solid #d8d5d0;
+  border-radius: 4px;
+}
+
+/* ── Sidebar tweaks ── */
+.VPSidebar .group + .group {
+  border-top: 1px solid var(--vp-c-divider);
+  padding-top: 12px;
+}
+
+/* ── Hero section ── */
+.VPHero .name {
+  font-family: var(--vp-font-family-mono);
+}
+
+.VPHero .tagline {
+  font-size: 1.15rem !important;
+  line-height: 1.6;
+  opacity: 0.85;
+}
+
+/* ── Feature cards ── */
+.VPFeature {
+  border: 1px solid var(--vp-c-divider) !important;
+  border-radius: 4px !important;
+  transition: border-color 0.25s;
+}
+
+.VPFeature:hover {
+  border-color: var(--vp-c-brand-1) !important;
+}
+
+/* ── Custom badge for terminal-style labels ── */
+.vp-doc .badge-terminal {
+  display: inline-block;
+  font-family: var(--vp-font-family-mono);
+  font-size: 0.75rem;
+  padding: 2px 8px;
+  border-radius: 2px;
+  background: var(--vp-c-brand-soft);
+  color: var(--vp-c-brand-1);
+  border: 1px solid var(--vp-c-brand-1);
+}
