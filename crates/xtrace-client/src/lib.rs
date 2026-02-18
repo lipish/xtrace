@@ -147,6 +147,12 @@ impl Client {
             if let Some(v) = q.to_timestamp.as_ref() {
                 pairs.append_pair("toTimestamp", &v.to_rfc3339());
             }
+            if let Some(v) = q.version.as_deref() {
+                pairs.append_pair("version", v);
+            }
+            if let Some(v) = q.release.as_deref() {
+                pairs.append_pair("release", v);
+            }
         }
 
         let res = self.http.get(url).send().await?.error_for_status()?;
@@ -195,6 +201,9 @@ impl Client {
             if let Some(v) = q.agg.as_deref() {
                 pairs.append_pair("agg", v);
             }
+            if let Some(v) = q.group_by.as_deref() {
+                pairs.append_pair("group_by", v);
+            }
         }
 
         let res = self.http.get(url).send().await?.error_for_status()?;
@@ -241,9 +250,12 @@ pub struct MetricsQueryParams {
     /// Downsample step: `1m`, `5m`, `1h`, `1d`. Default `1m`.
     #[serde(default)]
     pub step: Option<String>,
-    /// Aggregation: `avg`, `max`, `min`, `sum`, `last`. Default `avg`.
+    /// Aggregation: `avg`, `max`, `min`, `sum`, `last`, `p50`, `p90`, `p99`. Default `avg`.
     #[serde(default)]
     pub agg: Option<String>,
+    /// Group results by a specific label key instead of the full label set.
+    #[serde(default)]
+    pub group_by: Option<String>,
 }
 
 /// A single time-series data point.
@@ -531,6 +543,11 @@ pub struct MetricsDailyQuery {
     pub from_timestamp: Option<DateTime<Utc>>,
     #[serde(default, rename = "toTimestamp")]
     pub to_timestamp: Option<DateTime<Utc>>,
+
+    #[serde(default)]
+    pub version: Option<String>,
+    #[serde(default)]
+    pub release: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

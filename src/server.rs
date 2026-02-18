@@ -132,6 +132,8 @@ struct MetricsQuery {
     labels: Option<String>,
     step: Option<String>,
     agg: Option<String>,
+    /// Group results by a specific label key instead of the full label set.
+    group_by: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1456,8 +1458,11 @@ fn parse_agg(agg: Option<&str>) -> Result<&'static str, ApiError> {
         "min" => Ok("min"),
         "sum" => Ok("sum"),
         "last" => Ok("last"),
+        "p50" => Ok("p50"),
+        "p90" => Ok("p90"),
+        "p99" => Ok("p99"),
         _ => Err(ApiError::BadRequest(
-            "invalid agg, must be one of: avg, max, min, sum, last".to_string(),
+            "invalid agg, must be one of: avg, max, min, sum, last, p50, p90, p99".to_string(),
         )),
     }
 }
@@ -1518,6 +1523,9 @@ async fn get_metrics_query(
         "min" => "MIN(value)::DOUBLE PRECISION",
         "sum" => "SUM(value)::DOUBLE PRECISION",
         "last" => "(ARRAY_AGG(value ORDER BY timestamp DESC))[1]::DOUBLE PRECISION",
+        "p50" => "(percentile_cont(0.5) WITHIN GROUP (ORDER BY value))::DOUBLE PRECISION",
+        "p90" => "(percentile_cont(0.9) WITHIN GROUP (ORDER BY value))::DOUBLE PRECISION",
+        "p99" => "(percentile_cont(0.99) WITHIN GROUP (ORDER BY value))::DOUBLE PRECISION",
         _ => unreachable!(),
     };
 
@@ -1545,11 +1553,28 @@ async fn get_metrics_query(
         builder.push(" AND labels @> ");
         builder.push_bind(f.clone());
     }
-    builder.push(")\nSELECT\n  bucket_ts,\n  labels,\n  ");
+
+    builder.push(")\nSELECT\n  bucket_ts,\n  ");
+    if let Some(ref group_key) = q.group_by {
+        builder.push("jsonb_build_object(");
+        builder.push_bind(group_key.clone());
+        builder.push(", labels ->> ");
+        builder.push_bind(group_key.clone());
+        builder.push(") AS labels,\n  ");
+    } else {
+        builder.push("labels,\n  ");
+    }
     builder.push(agg_expr);
-    builder.push(
-        " AS value\nFROM filtered\nGROUP BY bucket_ts, labels\nORDER BY labels, bucket_ts ASC",
-    );
+    builder.push(" AS value\nFROM filtered\nGROUP BY bucket_ts, ");
+    if let Some(ref group_key) = q.group_by {
+        builder.push("labels ->> ");
+        builder.push_bind(group_key.clone());
+        builder.push("\nORDER BY labels ->> ");
+        builder.push_bind(group_key.clone());
+    } else {
+        builder.push("labels\nORDER BY labels");
+    }
+    builder.push(", bucket_ts ASC");
 
     let rows: Vec<MetricsQueryRow> = builder.build_query_as().fetch_all(&state.pool).await?;
 
@@ -1841,6 +1866,11 @@ struct MetricsDailyQuery {
     from_timestamp: Option<DateTime<Utc>>,
     #[serde(default, rename = "toTimestamp")]
     to_timestamp: Option<DateTime<Utc>>,
+
+    #[serde(default)]
+    version: Option<String>,
+    #[serde(default)]
+    release: Option<String>,
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -1900,6 +1930,14 @@ async fn get_metrics_daily(
         count_builder.push(" AND t.tags @> ");
         count_builder.push_bind(q.tags.clone());
     }
+    if let Some(version) = &q.version {
+        count_builder.push(" AND t.version = ");
+        count_builder.push_bind(version.clone());
+    }
+    if let Some(release) = &q.release {
+        count_builder.push(" AND t.release = ");
+        count_builder.push_bind(release.clone());
+    }
     count_builder.push(" GROUP BY 1) x");
 
     let total_items: i64 = count_builder
@@ -1933,6 +1971,14 @@ async fn get_metrics_daily(
     if !q.tags.is_empty() {
         builder.push(" AND t.tags @> ");
         builder.push_bind(q.tags.clone());
+    }
+    if let Some(version) = &q.version {
+        builder.push(" AND t.version = ");
+        builder.push_bind(version.clone());
+    }
+    if let Some(release) = &q.release {
+        builder.push(" AND t.release = ");
+        builder.push_bind(release.clone());
     }
 
     builder.push(
