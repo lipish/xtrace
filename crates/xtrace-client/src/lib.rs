@@ -381,6 +381,56 @@ pub struct TraceIngest {
     pub project_id: Option<String>,
 }
 
+impl TraceIngest {
+    pub fn new(id: Uuid) -> Self {
+        Self {
+            id,
+            timestamp: None,
+            name: None,
+            input: None,
+            output: None,
+            session_id: None,
+            release: None,
+            version: None,
+            user_id: None,
+            metadata: None,
+            tags: vec![],
+            public: None,
+            environment: None,
+            external_id: None,
+            bookmarked: None,
+            latency: None,
+            total_cost: None,
+            project_id: None,
+        }
+    }
+
+    pub fn with_session_id(mut self, session_id: impl Into<String>) -> Self {
+        self.session_id = Some(session_id.into());
+        self
+    }
+
+    pub fn with_metadata_field(mut self, key: &str, value: impl Serialize) -> Self {
+        let mut meta = match self.metadata {
+            Some(JsonValue::Object(map)) => map,
+            _ => serde_json::Map::new(),
+        };
+        if let Ok(v) = serde_json::to_value(value) {
+            meta.insert(key.to_string(), v);
+        }
+        self.metadata = Some(JsonValue::Object(meta));
+        self
+    }
+
+    pub fn with_turn_id(self, turn_id: impl Into<String>) -> Self {
+        self.with_metadata_field("turn_id", turn_id.into())
+    }
+
+    pub fn with_run_id(self, run_id: impl Into<String>) -> Self {
+        self.with_metadata_field("run_id", run_id.into())
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ObservationIngest {
@@ -466,6 +516,71 @@ pub struct ObservationIngest {
 
     #[serde(default, rename = "projectId")]
     pub project_id: Option<String>,
+}
+
+impl ObservationIngest {
+    pub fn new(id: Uuid, trace_id: Uuid) -> Self {
+        Self {
+            id,
+            trace_id,
+            r#type: None,
+            name: None,
+            start_time: None,
+            end_time: None,
+            completion_start_time: None,
+            model: None,
+            model_parameters: None,
+            input: None,
+            output: None,
+            usage: None,
+            level: None,
+            status_message: None,
+            parent_observation_id: None,
+            prompt_id: None,
+            prompt_name: None,
+            prompt_version: None,
+            model_id: None,
+            input_price: None,
+            output_price: None,
+            total_price: None,
+            calculated_input_cost: None,
+            calculated_output_cost: None,
+            calculated_total_cost: None,
+            latency: None,
+            time_to_first_token: None,
+            completion_tokens: None,
+            prompt_tokens: None,
+            total_tokens: None,
+            unit: None,
+            metadata: None,
+            environment: None,
+            project_id: None,
+        }
+    }
+
+    pub fn with_metadata_field(mut self, key: &str, value: impl Serialize) -> Self {
+        let mut meta = match self.metadata {
+            Some(JsonValue::Object(map)) => map,
+            _ => serde_json::Map::new(),
+        };
+        if let Ok(v) = serde_json::to_value(value) {
+            meta.insert(key.to_string(), v);
+        }
+        self.metadata = Some(JsonValue::Object(meta));
+        self
+    }
+
+    pub fn with_step_id(self, step_id: impl Into<String>) -> Self {
+        self.with_metadata_field("step_id", step_id.into())
+    }
+
+    pub fn with_parent_step_id(self, parent_step_id: impl Into<String>) -> Self {
+        self.with_metadata_field("parent_step_id", parent_step_id.into())
+    }
+
+    pub fn with_step_type(self, step_type: impl Into<String>) -> Self {
+        self.with_metadata_field("step_type", step_type.into())
+    }
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]

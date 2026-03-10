@@ -11,6 +11,8 @@ def observe_openai(
     name: Optional[str] = None,
     user_id: Optional[str] = None,
     session_id: Optional[str] = None,
+    turn_id: Optional[str] = None,
+    run_id: Optional[str] = None,
     tags: Optional[list[str]] = None,
     metadata: Optional[dict] = None,
     project_id: Optional[str] = None,
@@ -21,6 +23,8 @@ def observe_openai(
         name=name,
         user_id=user_id,
         session_id=session_id,
+        turn_id=turn_id,
+        run_id=run_id,
         tags=tags or [],
         metadata=metadata or {},
         project_id=project_id,
@@ -36,6 +40,8 @@ class _OpenAIClientWrapper:
         name: Optional[str],
         user_id: Optional[str],
         session_id: Optional[str],
+        turn_id: Optional[str],
+        run_id: Optional[str],
         tags: list[str],
         metadata: dict,
         project_id: Optional[str],
@@ -45,6 +51,8 @@ class _OpenAIClientWrapper:
         self._name = name
         self._user_id = user_id
         self._session_id = session_id
+        self._turn_id = turn_id
+        self._run_id = run_id
         self._tags = tags
         self._metadata = metadata
         self._project_id = project_id
@@ -208,14 +216,26 @@ def _build_payload(
     end_iso = _to_iso(start + latency)
     completion_iso = _to_iso(start + ttfb) if ttfb is not None else None
 
+    # Merge explicit correlation IDs into metadata
+    meta = (root._metadata or {}).copy()
+    if root._turn_id:
+        meta["turn_id"] = root._turn_id
+    if root._run_id:
+        meta["run_id"] = root._run_id
+
+    # Allow request-specific overrides in kwargs metadata
+    req_meta = kwargs.get("metadata") or {}
+    # If the user passed explicit step_id or parent_step_id via kwargs, they will be in req_meta
+    final_meta = {**meta, **req_meta}
+
     trace = {
         "id": trace_id,
         "timestamp": ts_iso,
         "name": kwargs.get("name") or root._name,
         "userId": root._user_id,
-        "sessionId": root._session_id,
+        "session_id": root._session_id,
         "tags": root._tags,
-        "metadata": root._metadata or None,
+        "metadata": final_meta or None,
         "projectId": root._project_id or root._xtrace._cfg.default_project_id,
         "latency": latency,
         "totalCost": None,
@@ -256,7 +276,7 @@ def _build_payload(
         "promptTokens": _safe_get_int(usage, ["input"]),
         "totalTokens": _safe_get_int(usage, ["total"]),
         "unit": _safe_get_str(usage, ["unit"]),
-        "metadata": kwargs.get("metadata"),
+        "metadata": final_meta or None,
         "projectId": root._project_id or root._xtrace._cfg.default_project_id,
     }
 
