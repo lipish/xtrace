@@ -9,6 +9,10 @@ import {
   ArrowRightLeft,
   Database,
   Code,
+  Wrench,
+  Brain,
+  Search,
+  Hand,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -19,6 +23,7 @@ interface SpanNode {
   id: string;
   name: string;
   type: "generation" | "retrieval" | "span" | "embedding" | "observation";
+  stepType?: string;
   latencyText: string;
   costText?: string;
   tokensText?: string;
@@ -47,6 +52,9 @@ const formatTokens = (obs: Observation) => {
 
 const observationToNode = (observation: Observation): SpanNode => {
   const type = observation.type.toLowerCase();
+  const metadata = (observation.metadata as Record<string, any>) || {};
+  const stepType = metadata.step_type || metadata.stepType;
+
   const mappedType = ((): SpanNode["type"] => {
     if (type.includes("generation")) return "generation";
     if (type.includes("embedding")) return "embedding";
@@ -58,6 +66,7 @@ const observationToNode = (observation: Observation): SpanNode => {
     id: observation.id,
     name: observation.name || observation.type,
     type: mappedType,
+    stepType: typeof stepType === "string" ? stepType.toLowerCase() : undefined,
     latencyText: formatSeconds(observation.latency),
     costText: formatCost(observation.calculatedTotalCost ?? observation.totalPrice),
     tokensText: observation.usage ? formatTokens(observation) : undefined,
@@ -100,8 +109,30 @@ function SpanTreeNode({ node, depth = 0 }: { node: SpanNode; depth?: number }) {
   const [expanded, setExpanded] = useState(true);
   const hasChildren = node.children && node.children.length > 0;
 
-  const getTypeIcon = (type: SpanNode["type"]) => {
-    switch (type) {
+  const getTypeIcon = (node: SpanNode) => {
+    // Priority: Specific Step Type > General Observation Type
+    if (node.stepType) {
+      switch (node.stepType) {
+        case "tool_call":
+        case "tool":
+          return <Wrench className="h-3.5 w-3.5 text-xtrace-orange" />;
+        case "retrieval":
+          return <Search className="h-3.5 w-3.5 text-xtrace-info" />;
+        case "planner":
+        case "plan":
+          return <Brain className="h-3.5 w-3.5 text-xtrace-purple" />;
+        case "memory_write":
+        case "memory":
+          return <Database className="h-3.5 w-3.5 text-muted-foreground" />;
+        case "handoff":
+          return <Hand className="h-3.5 w-3.5 text-muted-foreground" />;
+        case "llm_call":
+          return <Sparkles className="h-3.5 w-3.5 text-xtrace-pink" />;
+      }
+    }
+
+    // Fallback to basic types
+    switch (node.type) {
       case "generation":
         return <Sparkles className="h-3.5 w-3.5 text-xtrace-pink" />;
       case "retrieval":
@@ -134,7 +165,7 @@ function SpanTreeNode({ node, depth = 0 }: { node: SpanNode; depth?: number }) {
           )}
         </div>
 
-        {getTypeIcon(node.type)}
+        {getTypeIcon(node)}
 
         <span className="font-medium text-sm text-foreground">{node.name}</span>
 
@@ -164,6 +195,11 @@ function SpanTreeNode({ node, depth = 0 }: { node: SpanNode; depth?: number }) {
 
 export function TraceDetail({ trace }: TraceDetailProps) {
   const spanRoots = useMemo(() => buildSpanTree(trace.observations), [trace.observations]);
+  
+  // Extract IDs from metadata for display
+  const metadata = (trace.metadata as Record<string, any>) || {};
+  const turnId = metadata.turn_id || metadata.turnId;
+  const runId = metadata.run_id || metadata.runId;
 
   return (
     <div className="flex flex-col h-full bg-card rounded-lg border border-border overflow-hidden">
@@ -190,6 +226,16 @@ export function TraceDetail({ trace }: TraceDetailProps) {
           {trace.sessionId && (
             <Badge className="bg-xtrace-info/10 text-xtrace-info border-xtrace-info/20 hover:bg-xtrace-info/20">
               Session: {trace.sessionId}
+            </Badge>
+          )}
+          {turnId && (
+            <Badge variant="outline" className="border-dashed">
+              Turn: {turnId}
+            </Badge>
+          )}
+          {runId && (
+            <Badge variant="outline" className="border-dashed">
+              Run: {runId}
             </Badge>
           )}
           {trace.userId && (

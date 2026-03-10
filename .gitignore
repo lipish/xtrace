@@ -14,3 +14,6 @@ xgateway/
 www/node_modules/
 www/.vitepress/dist/
 www/.vitepress/cache/
+
+# Frontend app
+frontend/node_modules/
