@@ -23,7 +23,7 @@ export default defineConfig({
       { text: 'SDK', link: '/sdk/rust-client', activeMatch: '/sdk/' },
       { text: 'Integrations', link: '/integrations/nebula', activeMatch: '/integrations/' },
       {
-        text: 'v0.0.14',
+        text: 'v0.0.15',
         items: [
           { text: 'Changelog', link: 'https://github.com/lipish/xtrace/releases' },
           { text: 'crates.io', link: 'https://crates.io/crates/xtrace' },
@@ -45,6 +45,7 @@ export default defineConfig({
           items: [
             { text: 'Development', link: '/guide/development' },
             { text: 'Deployment', link: '/guide/deployment' },
+            { text: 'Session-Aware Ingest', link: '/guide/session-ingest' },
           ],
         },
       ],

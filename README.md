@@ -33,6 +33,25 @@ Health check:
 curl http://127.0.0.1:8742/healthz
 ```
 
+## Session-aware tracing
+
+xtrace supports session-oriented metadata propagation for multi-turn and agent-style workflows, including:
+
+- `session_id`
+- `turn_id`
+- `run_id`
+- `step_id` / `step_type`
+
+For the full model, instrumentation notes, and end-to-end verification flow, see:
+
+- [docs/session_ingest.md](docs/session_ingest.md)
+
+Quick verifier script:
+
+```bash
+python scripts/verify_session_ingest.py
+```
+
 ## HTTP API
 
 All endpoints except `/healthz` require:
