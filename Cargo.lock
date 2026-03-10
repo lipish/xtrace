@@ -3297,7 +3297,7 @@ dependencies = [
 
 [[package]]
 name = "xtrace-client"
-version = "0.0.13"
+version = "0.0.15"
 dependencies = [
  "chrono",
  "reqwest",

@@ -6,7 +6,7 @@ The `xtrace-client` crate provides an async HTTP client for interacting with the
 
 ```toml
 [dependencies]
-xtrace-client = "0.0.12"
+xtrace-client = "0.0.15"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -14,7 +14,7 @@ To enable automatic metric collection via the `tracing` ecosystem:
 
 ```toml
 [dependencies]
-xtrace-client = { version = "0.0.12", features = ["tracing"] }
+xtrace-client = { version = "0.0.15", features = ["tracing"] }
 ```
 
 ## Quick Start
