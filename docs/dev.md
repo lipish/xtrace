@@ -94,6 +94,7 @@ cargo run -p xtrace-api
 Health check:
 
 - `GET /healthz`: No auth; used for liveness
+- `GET /readyz`: No auth; checks PostgreSQL (readiness / orchestrator probe)
 
 ## API Implementation Conventions (aligned with docs/api.md)
 
@@ -101,7 +102,7 @@ Health check:
 
 Public endpoints follow Langfuse OpenAPI:
 
-`GET /api/public/traces` returns paginated object: `{ data: [...], meta: { page, limit, totalItems, totalPages } }`
+`GET /api/public/traces` returns paginated object: `{ data: [...], meta: { page, limit, totalItems, totalPages } }`. Each list item includes Langfuse-aligned fields such as `projectId`, `createdAt`, `updatedAt`, `externalId`, `bookmarked` (see `src/http/traces.rs`).
 
 `GET /api/public/traces/{traceId}` returns the trace object directly (no outer `data/meta/message` wrapper).
 

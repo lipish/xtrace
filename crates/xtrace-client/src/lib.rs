@@ -638,10 +638,20 @@ pub struct TraceListItem {
     pub metadata: Option<JsonValue>,
     pub tags: Vec<String>,
     pub public: bool,
+    #[serde(default)]
+    pub project_id: Option<String>,
+    #[serde(default)]
+    pub external_id: Option<String>,
+    #[serde(default)]
+    pub bookmarked: bool,
     pub environment: String,
     pub html_path: String,
     pub latency: Option<f64>,
     pub total_cost: Option<f64>,
+    #[serde(default)]
+    pub created_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub updated_at: Option<DateTime<Utc>>,
     pub observations: Vec<String>,
     pub scores: Vec<String>,
 }
@@ -697,10 +707,20 @@ pub struct TraceDetailDto {
     pub metadata: JsonValue,
     pub tags: Vec<String>,
     pub public: bool,
+    #[serde(default)]
+    pub project_id: Option<String>,
+    #[serde(default)]
+    pub external_id: Option<String>,
+    #[serde(default)]
+    pub bookmarked: bool,
     pub environment: String,
     pub html_path: String,
     pub latency: Option<f64>,
     pub total_cost: Option<f64>,
+    #[serde(default)]
+    pub created_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub updated_at: Option<DateTime<Utc>>,
     pub observations: Vec<JsonValue>,
     pub scores: Vec<JsonValue>,
 }

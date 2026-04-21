@@ -65,6 +65,7 @@ pub(crate) async fn auth(
     let is_langfuse_compat = matches!(path, "/api/public/projects" | "/api/public/otel/v1/traces");
     let langfuse_auth_not_configured =
         state.langfuse_public_key.is_none() && state.langfuse_secret_key.is_none();
+    let open_compat = state.allow_unauthenticated_compat && langfuse_auth_not_configured;
 
     match extract_auth(&headers) {
         Ok(AuthHeader::Bearer(token)) if token == state.api_bearer_token.as_ref() => {
@@ -82,8 +83,8 @@ pub(crate) async fn auth(
         {
             next.run(request).await
         }
-        Err(()) if is_langfuse_compat && langfuse_auth_not_configured => next.run(request).await,
-        Ok(AuthHeader::Basic { .. }) if is_langfuse_compat && langfuse_auth_not_configured => {
+        Err(()) if is_langfuse_compat && open_compat => next.run(request).await,
+        Ok(AuthHeader::Basic { .. }) if is_langfuse_compat && open_compat => {
             next.run(request).await
         }
         _ => (

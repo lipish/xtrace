@@ -33,6 +33,13 @@ async fn main() -> anyhow::Result<()> {
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(40),
+        allow_unauthenticated_compat: std::env::var("XTRACE_ALLOW_UNAUTHENTICATED_COMPAT")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false),
+        max_request_body_bytes: std::env::var("XTRACE_MAX_REQUEST_BODY_BYTES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(20 * 1024 * 1024),
     };
 
     run_server(config).await

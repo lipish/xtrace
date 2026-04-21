@@ -18,6 +18,8 @@ Environment variables:
 | `XTRACE_SECRET_KEY` | | — | Langfuse BasicAuth compatibility |
 | `RATE_LIMIT_QPS` | | `20` | Per-token query rate limit |
 | `RATE_LIMIT_BURST` | | `40` | Per-token burst cap |
+| `XTRACE_ALLOW_UNAUTHENTICATED_COMPAT` | | unset (off) | Set to `1` only in dev: allow unauthenticated `GET /api/public/projects` and OTLP when Langfuse keys are not set. **Keep off in production.** |
+| `XTRACE_MAX_REQUEST_BODY_BYTES` | | `20971520` (20 MiB) | Max JSON body size for ingest routes |
 
 Also accepts legacy names `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY`.
 
@@ -27,11 +29,14 @@ API_BEARER_TOKEN=secret \
 cargo run --release
 ```
 
-Health check:
+Health checks:
 
 ```bash
 curl http://127.0.0.1:8742/healthz
+curl http://127.0.0.1:8742/readyz
 ```
+
+`GET /healthz` returns 200 if the process is up. `GET /readyz` returns 200 only when PostgreSQL is reachable (use as a Kubernetes readiness probe).
 
 ## Session-aware tracing
 
@@ -45,6 +50,8 @@ xtrace supports session-oriented metadata propagation for multi-turn and agent-s
 For the full model, instrumentation notes, and end-to-end verification flow, see:
 
 - [docs/session_ingest.md](docs/session_ingest.md)
+
+Xinference 部署将 Langfuse 后端替换为 xtrace 时，见 [docs/xinference_integration.md](docs/xinference_integration.md)。
 
 Quick verifier script:
 
@@ -125,7 +132,7 @@ curl -H "Authorization: Bearer $API_BEARER_TOKEN" \
 
 ```toml
 [dependencies]
-xtrace-client = "0.0.15"
+xtrace-client = "0.0.16"
 ```
 
 ```rust
@@ -164,7 +171,7 @@ async fn main() -> anyhow::Result<()> {
 Enable the `tracing` feature to automatically push metrics from `tracing` events and span durations — no manual `push_metrics` calls needed:
 
 ```toml
-xtrace-client = { version = "0.0.15", features = ["tracing"] }
+xtrace-client = { version = "0.0.16", features = ["tracing"] }
 ```
 
 ```rust

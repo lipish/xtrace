@@ -175,11 +175,7 @@ impl XtraceLayer {
     }
 }
 
-fn flush_batch(
-    rt: &tokio::runtime::Runtime,
-    client: &Client,
-    batch: &mut Vec<MetricPoint>,
-) {
+fn flush_batch(rt: &tokio::runtime::Runtime, client: &Client, batch: &mut Vec<MetricPoint>) {
     if batch.is_empty() {
         return;
     }
@@ -223,13 +219,8 @@ where
                 ctx.current_span().id().cloned()
             };
 
-            let parent_tid = parent_id.and_then(|pid| {
-                trace_id_store()
-                    .lock()
-                    .ok()?
-                    .get(&pid.into_u64())
-                    .copied()
-            });
+            let parent_tid = parent_id
+                .and_then(|pid| trace_id_store().lock().ok()?.get(&pid.into_u64()).copied());
 
             parent_tid.unwrap_or_else(Uuid::new_v4)
         };
@@ -270,7 +261,10 @@ where
         let key = id.into_u64();
 
         // Remove and read trace_id before cleanup.
-        let trace_id = trace_id_store().lock().ok().and_then(|mut s| s.remove(&key));
+        let trace_id = trace_id_store()
+            .lock()
+            .ok()
+            .and_then(|mut s| s.remove(&key));
 
         let (duration_secs, span_name) = {
             let mut guard = self.inner.span_records.lock().unwrap();

@@ -5,16 +5,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
-use crate::{
-    http::metrics::MetricsBatchRequest,
-    ingest::batch::BatchIngestRequest,
-};
+use crate::{http::metrics::MetricsBatchRequest, ingest::batch::BatchIngestRequest};
 
-pub type KeyedRateLimiter = governor::RateLimiter<
-    String,
-    governor::state::keyed::DashMapStateStore<String>,
-    DefaultClock,
->;
+pub type KeyedRateLimiter =
+    governor::RateLimiter<String, governor::state::keyed::DashMapStateStore<String>, DefaultClock>;
 
 pub struct RateLimitStats {
     pub total_allowed: AtomicU64,
@@ -65,6 +59,12 @@ pub struct ServerConfig {
     pub langfuse_secret_key: Option<String>,
     pub rate_limit_qps: u32,
     pub rate_limit_burst: u32,
+    /// When true, allows unauthenticated access to `GET /api/public/projects` and
+    /// `POST /api/public/otel/v1/traces` if Langfuse public/secret keys are not configured.
+    /// **Must stay false in production** (default).
+    pub allow_unauthenticated_compat: bool,
+    /// Maximum HTTP request body size in bytes (ingest endpoints).
+    pub max_request_body_bytes: usize,
 }
 
 #[derive(Clone)]
@@ -80,6 +80,7 @@ pub struct AppState {
     pub rate_limit_stats: Arc<RateLimitStats>,
     pub rate_limit_qps: u32,
     pub rate_limit_burst: u32,
+    pub allow_unauthenticated_compat: bool,
 }
 
 impl AppState {

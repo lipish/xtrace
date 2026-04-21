@@ -1,4 +1,5 @@
 use axum::{
+    extract::DefaultBodyLimit,
     middleware::{self},
     routing::{get, post},
     Router,
@@ -8,7 +9,7 @@ use std::{net::SocketAddr, sync::Arc};
 use tokio::sync::mpsc;
 use tower_http::trace::TraceLayer;
 
-use crate::http::common::healthz;
+use crate::http::common::{healthz, readyz};
 use crate::http::{
     auth::{auth, rate_limit},
     metrics::{self, metrics_worker, post_metrics_batch, MetricsBatchRequest},
@@ -49,6 +50,7 @@ pub async fn run_server(config: ServerConfig) -> anyhow::Result<()> {
         rate_limit_stats,
         rate_limit_qps: qps,
         rate_limit_burst: burst,
+        allow_unauthenticated_compat: config.allow_unauthenticated_compat,
     };
 
     tokio::spawn(ingest_worker(
@@ -92,10 +94,13 @@ pub async fn run_server(config: ServerConfig) -> anyhow::Result<()> {
         burst
     );
 
+    let max_body = config.max_request_body_bytes;
     let app = Router::new()
         .route("/healthz", get(healthz))
+        .route("/readyz", get(readyz))
         .route("/api/internal/rate_limit_stats", get(get_rate_limit_stats))
         .merge(protected_routes)
+        .layer(DefaultBodyLimit::max(max_body))
         .with_state(state)
         .layer(TraceLayer::new_for_http());
 
@@ -130,4 +135,3 @@ async fn shutdown_signal() {
         _ = terminate => {},
     }
 }
-

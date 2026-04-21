@@ -1,0 +1,17 @@
+name: Project status reminder
+
+on:
+  schedule:
+    - cron: "0 9 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  remind:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Weekly reminder
+        run: |
+          echo "根据 AGENTS.md「定期更新项目情况」刷新 docs/project_status.md（更新快照日期与现状段落）。"

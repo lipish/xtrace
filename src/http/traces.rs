@@ -71,9 +71,13 @@ struct TraceListRow {
     metadata: Option<JsonValue>,
     tags: Vec<String>,
     public: bool,
+    external_id: Option<String>,
+    bookmarked: bool,
     environment: String,
     latency: Option<f64>,
     total_cost: Option<f64>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
     observations: Vec<Uuid>,
 }
 
@@ -95,10 +99,15 @@ struct TraceListItem {
     metadata: Option<JsonValue>,
     tags: Vec<String>,
     public: bool,
+    project_id: String,
+    external_id: Option<String>,
+    bookmarked: bool,
     environment: String,
     html_path: String,
     latency: Option<f64>,
     total_cost: Option<f64>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
     observations: Vec<String>,
     scores: Vec<String>,
 }
@@ -245,9 +254,13 @@ SELECT
   t.metadata,
   t.tags,
   t.public,
+  t.external_id,
+  t.bookmarked,
   t.environment,
   t.latency,
   t.total_cost,
+  t.created_at,
+  t.updated_at,
   COALESCE(array_agg(o.id) FILTER (WHERE o.id IS NOT NULL), '{}') AS observations
 FROM traces t
 LEFT JOIN observations o ON o.trace_id = t.id
@@ -288,8 +301,16 @@ WHERE 1=1
                 Vec::with_capacity(0)
             };
 
-            let latency = if fields.metrics { r.latency } else { Some(-1.0) };
-            let total_cost = if fields.metrics { r.total_cost } else { Some(-1.0) };
+            let latency = if fields.metrics {
+                r.latency
+            } else {
+                Some(-1.0)
+            };
+            let total_cost = if fields.metrics {
+                r.total_cost
+            } else {
+                Some(-1.0)
+            };
 
             TraceListItem {
                 html_path: format!("/project/{}/traces/{}", r.project_id, r.id),
@@ -317,9 +338,14 @@ WHERE 1=1
                 },
                 tags: r.tags,
                 public: r.public,
+                project_id: r.project_id,
+                external_id: r.external_id,
+                bookmarked: r.bookmarked,
                 environment: r.environment,
                 latency,
                 total_cost,
+                created_at: r.created_at,
+                updated_at: r.updated_at,
                 observations,
                 scores,
             }
@@ -472,10 +498,15 @@ struct TraceDetailDto {
     metadata: JsonValue,
     tags: Vec<String>,
     public: bool,
+    project_id: String,
+    external_id: Option<String>,
+    bookmarked: bool,
     environment: String,
     html_path: String,
     latency: Option<f64>,
     total_cost: Option<f64>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
     observations: Vec<ObservationsViewDto>,
     scores: Vec<ScoreV1Dto>,
 }
@@ -675,9 +706,14 @@ ORDER BY start_time NULLS LAST, created_at
         metadata: trace.metadata.unwrap_or(JsonValue::Null),
         tags: trace.tags,
         public: trace.public,
+        project_id: trace.project_id,
+        external_id: trace.external_id,
+        bookmarked: trace.bookmarked,
         environment: trace.environment,
         latency: trace.latency,
         total_cost: trace.total_cost,
+        created_at: trace.created_at,
+        updated_at: trace.updated_at,
         observations: obs_dtos,
     };
 
