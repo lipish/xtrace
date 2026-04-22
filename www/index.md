@@ -9,6 +9,9 @@ hero:
       text: Get Started →
       link: /guide/getting-started
     - theme: alt
+      text: Customer Testing →
+      link: /guide/customer-testing
+    - theme: alt
       text: View on GitHub
       link: https://github.com/lipish/xtrace
   image:

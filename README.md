@@ -24,10 +24,12 @@ Environment variables:
 Also accepts legacy names `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY`.
 
 ```bash
-DATABASE_URL=postgresql://user@localhost:5432/xtrace \
+DATABASE_URL=postgresql://xinference@localhost:5432/xtrace \
 API_BEARER_TOKEN=secret \
 cargo run --release
 ```
+
+（把 `xinference` 换成你本机 PostgreSQL 里实际存在的用户名；需已创建数据库 `xtrace`。）
 
 Health checks:
 
@@ -58,6 +60,84 @@ Quick verifier script:
 ```bash
 python scripts/verify_session_ingest.py
 ```
+
+Bulk demo traces + metrics (Bearer auth; run while xtrace is up):
+
+```bash
+export API_BEARER_TOKEN=your-token
+python3 scripts/seed_demo_data.py
+```
+
+Before connecting Xinference, run the full chain smoke test (`API_BEARER_TOKEN` + same `XTRACE_*` keys as the server):
+
+```bash
+python3 scripts/xinference_chain_smoke_test.py
+```
+
+End-to-end check that **user/model input-output** round-trip after ingest (Bearer) and read (Basic, like Xinference):
+
+```bash
+python3 scripts/full_integration_test.py
+```
+
+## Hosted Customer Test
+
+For customer trials, the public documentation stays on `https://xtrace.sh`, and the hosted API endpoint is:
+
+```text
+https://api.xtrace.sh
+```
+
+### 1. Smoke check the hosted service
+
+These endpoints do not require credentials:
+
+```bash
+curl -sS https://api.xtrace.sh/healthz
+curl -sS https://api.xtrace.sh/readyz
+```
+
+Expected result:
+
+- `/healthz` returns `200 OK`
+- `/readyz` returns `{"status":"ready"}`
+
+### 2. Test with Xinference
+
+Ask your xtrace contact for a trial `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` over a secure channel, then point Xinference at the hosted endpoint:
+
+```bash
+export LANGFUSE_HOST=https://api.xtrace.sh
+export LANGFUSE_PUBLIC_KEY=pk-...
+export LANGFUSE_SECRET_KEY=sk-...
+```
+
+If you configure Langfuse settings through the Xinference UI or API instead of environment variables, use the same three values there.
+
+### 3. Test the public read API directly
+
+Once you have the trial key pair, you can verify the Langfuse-compatible public API with HTTP Basic auth:
+
+```bash
+curl -sS -u "$LANGFUSE_PUBLIC_KEY:$LANGFUSE_SECRET_KEY" \
+  https://api.xtrace.sh/api/public/projects
+
+curl -sS -u "$LANGFUSE_PUBLIC_KEY:$LANGFUSE_SECRET_KEY" \
+  "https://api.xtrace.sh/api/public/traces?page=1&limit=10"
+
+curl -sS -u "$LANGFUSE_PUBLIC_KEY:$LANGFUSE_SECRET_KEY" \
+  https://api.xtrace.sh/api/public/metrics/daily
+```
+
+### 4. Expected customer test flow
+
+1. Confirm `readyz` is healthy.
+2. Point Xinference `LANGFUSE_HOST` to `https://api.xtrace.sh`.
+3. Configure the provided public/secret key pair.
+4. Trigger one inference request from Xinference.
+5. Verify traces and daily metrics can be read back from `/api/public/*`.
+
+**GCP VM / systemd / TLS**：见 [deploy/gcp/README.md](deploy/gcp/README.md) 与 [deploy/systemd/xtrace.service](deploy/systemd/xtrace.service)（需自行在 GCP 执行 `gcloud` 与 DNS）。
 
 ## HTTP API
 
