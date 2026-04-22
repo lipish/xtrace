@@ -80,9 +80,9 @@ End-to-end check that **user/model input-output** round-trip after ingest (Beare
 python3 scripts/full_integration_test.py
 ```
 
-## Hosted Customer Test
+## Hosted Xinference Integration Test
 
-For customer trials, the public documentation stays on `https://xtrace.sh`, and the hosted API endpoint is:
+For Xinference integration trials, the public documentation stays on `https://xtrace.sh`, and the hosted API endpoint is:
 
 ```text
 https://api.xtrace.sh
@@ -129,7 +129,7 @@ curl -sS -u "$LANGFUSE_PUBLIC_KEY:$LANGFUSE_SECRET_KEY" \
   https://api.xtrace.sh/api/public/metrics/daily
 ```
 
-### 4. Expected customer test flow
+### 4. Expected Xinference test flow
 
 1. Confirm `readyz` is healthy.
 2. Point Xinference `LANGFUSE_HOST` to `https://api.xtrace.sh`.

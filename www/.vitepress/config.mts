@@ -37,7 +37,6 @@ export default defineConfig({
           text: 'Introduction',
           items: [
             { text: 'Getting Started', link: '/guide/getting-started' },
-            { text: 'Customer Testing', link: '/guide/customer-testing' },
             { text: 'Configuration', link: '/guide/configuration' },
           ],
         },
@@ -75,6 +74,7 @@ export default defineConfig({
           items: [
             { text: 'Nebula', link: '/integrations/nebula' },
             { text: 'Langfuse', link: '/integrations/langfuse' },
+            { text: 'Xinference', link: '/integrations/xinference' },
             { text: 'tracing (Rust)', link: '/integrations/tracing' },
           ],
         },
