@@ -46,12 +46,12 @@ features:
 <div class="changelog-list">
 
 <div class="changelog-item">
-  <span class="changelog-version">v0.0.14</span>
-  <span class="changelog-date">Feb 2026</span>
+  <span class="changelog-version">v0.1.0</span>
+  <span class="changelog-date">Apr 2026</span>
   <div class="changelog-content">
-    <strong>tracing Integration</strong> — <code>XtraceLayer</code> for <code>xtrace-client</code> (feature = "tracing"). Automatically push metrics from <code>tracing</code> events and span durations with zero manual instrumentation. Batched background flush, non-blocking hot path.
+    <strong>Xinference Compatibility Hardening</strong> — Added Python compat and integration guidance for replacing Langfuse with xtrace, deployment examples for GCP and systemd, smoke / end-to-end validation scripts, and improved batch ingest compatibility for <code>sessionId</code>-style clients.
     <div class="changelog-links">
-      <a href="/integrations/tracing">Integration Guide →</a>
+      <a href="/integrations/langfuse">Integration Guide →</a>
       <a href="/sdk/rust-client">SDK Docs →</a>
     </div>
   </div>

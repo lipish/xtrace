@@ -212,7 +212,7 @@ curl -H "Authorization: Bearer $API_BEARER_TOKEN" \
 
 ```toml
 [dependencies]
-xtrace-client = "0.0.16"
+xtrace-client = "0.1.0"
 ```
 
 ```rust
@@ -251,7 +251,7 @@ async fn main() -> anyhow::Result<()> {
 Enable the `tracing` feature to automatically push metrics from `tracing` events and span durations — no manual `push_metrics` calls needed:
 
 ```toml
-xtrace-client = { version = "0.0.16", features = ["tracing"] }
+xtrace-client = { version = "0.1.0", features = ["tracing"] }
 ```
 
 ```rust

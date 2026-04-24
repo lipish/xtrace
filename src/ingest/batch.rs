@@ -33,7 +33,7 @@ pub(crate) struct TraceIngest {
     pub input: Option<JsonValue>,
     #[serde(default)]
     pub output: Option<JsonValue>,
-    #[serde(default)]
+    #[serde(default, alias = "sessionId")]
     pub session_id: Option<String>,
     #[serde(default)]
     pub release: Option<String>,

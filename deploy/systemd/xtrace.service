@@ -1,0 +1,26 @@
+[Unit]
+Description=xtrace observability API
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=xtrace
+Group=xtrace
+WorkingDirectory=/opt/xtrace
+Environment=DATABASE_URL=postgresql://xtrace:CHANGE_ME@127.0.0.1:5432/xtrace
+Environment=API_BEARER_TOKEN=CHANGE_ME_LONG_RANDOM
+Environment=XTRACE_PUBLIC_KEY=pk-lf-change-me
+Environment=XTRACE_SECRET_KEY=sk-lf-change-me
+Environment=BIND_ADDR=127.0.0.1:8742
+Environment=RUST_LOG=info
+ExecStart=/opt/xtrace/xtrace
+Restart=on-failure
+RestartSec=5
+
+# Hardening (adjust if you use a different layout)
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
